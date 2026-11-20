@@ -13,8 +13,18 @@
     $('prompt').value = instruction;
     $('promptForm').requestSubmit();
   }
+  function assertClearOfGrip(ids) {
+    for (const id of ids) {
+      const rect = $(id).getBoundingClientRect();
+      assert(rect.width > 0 && rect.height > 0, id + ' must be visible.');
+      // The native grip covers the first 22 x 44 points at the top left.
+      assert(rect.left >= 22 || rect.top >= 44, id + ' overlaps the native drag grip.');
+    }
+  }
 
   WordMath.start({ models: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] });
+  const promptControls = ['prompt', 'model', 'settings', 'generate'];
+  assertClearOfGrip(promptControls);
   generate('插入矩阵');
   assert($('receipt').hidden, 'Local requests must not manufacture an API receipt.');
   WordMath.receipt('模型 A · 请求 ID 123');
@@ -33,15 +43,26 @@
     $('receipt').textContent.includes('234'), 'A second failure should only offer a user-triggered retry with its own receipt.');
   $('repair').click();
   assert(calls('repair').length === 2 && $('receipt').hidden, 'Retry must send one new request and clear the receipt.');
-  const draft = { blocks: [{ type: 'paragraph', inlines: [{ text: '矩阵' }] }] };
-  const html = '<p><span data-edit="text" data-path="/blocks/0/inlines/0/text">矩阵</span></p>';
+  const draft = { blocks: [{ type: 'paragraph', inlines: [{ text: '矩阵' }, { math: { symbol: 'A' } }] }] };
+  const html = '<p><span data-edit="text" data-path="/blocks/0/inlines/0/text">矩阵</span>' +
+    '<math><mi data-edit="symbol" data-path="/blocks/0/inlines/1/math/symbol">A</mi></math></p>';
   WordMath.receipt('模型 A · 请求 ID 456');
   WordMath.result(draft, html);
+  assertClearOfGrip([...promptControls, 'revisionMode', 'replaceMode']);
+  const symbol = $('preview').querySelector('mi');
+  symbol.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  const editor = $('editValue');
+  assert(!$('editBar').hidden && editor.value.slice(editor.selectionStart, editor.selectionEnd) === 'A',
+    'Clicking a formula must still select its symbol for editing.');
+  editor.setRangeText('B');
+  $('applyEdit').click();
+  assert(symbol.textContent === 'B', 'Applying a local formula edit must update the preview.');
   assert(!$('receipt').hidden, 'A successful preview must retain its provider receipt.');
   generate('再加一列');
   assert($('receipt').hidden, 'New generation must not display an old API receipt.');
   assert(calls('generate').at(-1).originalPrompt === '插入矩阵', 'A repaired draft must retain the original instruction.');
   assert(calls('generate').at(-1).document.blocks[0].inlines[0].text === '矩阵', 'The follow-up must include the repaired draft.');
+  assert(calls('generate').at(-1).document.blocks[0].inlines[1].math.symbol === 'B', 'The follow-up must retain the local formula edit.');
 
   WordMath.formatError('格式错误');
   $('model').value = 'b';
