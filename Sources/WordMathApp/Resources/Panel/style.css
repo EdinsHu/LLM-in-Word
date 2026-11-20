@@ -40,6 +40,8 @@ button:disabled, select:disabled { opacity: .5; cursor: default; }
 .primary:hover { background: #154b86; }
 .icon { padding: 2px 6px; font-size: 16px; color: var(--muted); }
 form { display: flex; align-items: center; gap: 5px; width: 100%; }
+/* Leave the top-leading native drag grip clear in both the compact and preview layouts. */
+#promptForm, .mode-bar { padding-left: 16px; }
 input {
   min-width: 0; flex: 1; border: 1px solid var(--line); border-radius: 6px;
   padding: 6px 8px; background: var(--surface); outline: none;

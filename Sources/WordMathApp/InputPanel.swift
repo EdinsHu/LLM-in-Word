@@ -17,7 +17,8 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private let openSettings: () -> Void
     private let onClose: () -> Void
     private let page: URL
-    private var caret = NSRect.zero
+    private var placement: PanelPlacement = .caret(.zero)
+    private var lastLayoutTopLeft: NSPoint?
     private var request: Task<Void, Never>?
     private var failedReply: ModelFormattingError?
     private var closed = false
@@ -49,13 +50,29 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         window.hasShadow = true
         window.level = .floating
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        window.contentView = web
+        window.isMovable = true
+        let content = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        web.frame = content.bounds
+        web.autoresizingMask = [.width, .height]
+        content.addSubview(web)
+        let grip = PanelDragHandle { [weak self] in
+            guard let self else { return }
+            self.placement = .manual(topLeft: self.windowTopLeft)
+            self.lastLayoutTopLeft = nil
+        }
+        content.addSubview(grip)
+        NSLayoutConstraint.activate([
+            grip.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            grip.topAnchor.constraint(equalTo: content.topAnchor)
+        ])
+        window.contentView = content
         window.isReleasedWhenClosed = false
     }
 
     func present(at location: NSRect?, showExample: Bool) {
         exampleOnLoad = showExample
-        caret = location ?? NSRect(origin: NSEvent.mouseLocation, size: .init(width: 1, height: 1))
+        placement = .caret(location ?? NSRect(origin: NSEvent.mouseLocation, size: .init(width: 1, height: 1)))
+        lastLayoutTopLeft = nil
         place(width: 620, height: 60)
         web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
         focus()
@@ -69,15 +86,21 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         window.makeFirstResponder(web)
     }
 
+    private var windowTopLeft: NSPoint {
+        NSPoint(x: window.frame.minX, y: window.frame.maxY)
+    }
+
     private func place(width: CGFloat, height: CGFloat) {
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(caret.origin) }) ?? NSScreen.main else { return }
-        let bounds = screen.visibleFrame.insetBy(dx: 6, dy: 6)
-        let w = min(max(width, 320), bounds.width)
-        let h = min(max(height, 48), bounds.height)
-        let x = min(max(caret.minX, bounds.minX), bounds.maxX - w)
-        let below = caret.minY - h - 6
-        let y = below >= bounds.minY ? below : max(bounds.minY, min(caret.maxY + 6, bounds.maxY - h))
-        window.setFrame(.init(x: x, y: y, width: w, height: h), display: true)
+        // AppKit moves the window during a drag. A resize that only clamped the preview
+        // to the display edge should keep the user's preferred position for the next resize.
+        if case .manual = placement, windowTopLeft != lastLayoutTopLeft {
+            placement = .manual(topLeft: windowTopLeft)
+        }
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(placement.referencePoint) })
+                ?? window.screen ?? NSScreen.main else { return }
+        let frame = placement.frame(for: CGSize(width: width, height: height), in: screen.visibleFrame)
+        window.setFrame(frame, display: true)
+        lastLayoutTopLeft = windowTopLeft
     }
 
     private func modelConfig() -> ([[String: String]], String) {
