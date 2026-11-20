@@ -46,6 +46,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installEditMenu() {
         let menu = NSMenu()
+        let application = NSMenu(title: "WordMath")
+        application.addItem(withTitle: "退出 WordMath", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let applicationItem = NSMenuItem()
+        applicationItem.submenu = application
+        menu.addItem(applicationItem)
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "编辑")
         for (title, action, key) in [("撤销", "undo:", "z"), ("剪切", "cut:", "x"), ("复制", "copy:", "c"),
