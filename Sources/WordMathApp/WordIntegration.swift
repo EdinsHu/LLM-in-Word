@@ -123,8 +123,12 @@ enum WordIntegration {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: root) }
         let xml = document.wordXML(runProperties: anchor.runProperties, paragraphProperties: anchor.paragraphProperties)
-        let file = try WordFragment.package(xml: xml, in: root, hasPrefix: anchor.hasPrefix)
-        _ = try call("insertfragment", [anchor.identity, NSAppleEventDescriptor(string: file.path)])
+        let archive = try WordFragment.package(xml: xml, in: root, hasPrefix: anchor.hasPrefix)
+        let bytes = try Data(contentsOf: archive)
+        // Word remembers access to a particular file. Only its contents change between inserts.
+        try InsertionFile.withContents(bytes, in: InsertionFile.directory()) { source in
+            _ = try call("insertfragment", [anchor.identity, NSAppleEventDescriptor(string: source.path)])
+        }
     }
 
     /// AX uses a top-left global origin. AppKit uses the bottom-left of the primary screen.
