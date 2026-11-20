@@ -27,7 +27,7 @@ jobs:
         run: |
           ./scripts/build-app.sh
           app=dist/WordMath.app
-          lipo -verify_arch arm64 "$app/Contents/MacOS/WordMath"
+          lipo "$app/Contents/MacOS/WordMath" -verify_arch arm64
           codesign --verify --strict "$app"
           version="$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")"
           archive="dist/WordMath-${version}-macOS-arm64.zip"
