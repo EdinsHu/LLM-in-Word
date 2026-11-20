@@ -69,7 +69,7 @@ private final class ProofTransport: URLProtocol {
     override func stopLoading() {}
 }
 
-@Suite("Cayley–Hamilton proof generation", .serialized)
+@Suite("Structured mathematics generation", .serialized)
 struct ProofGenerationTests {
     let account = ProviderAccount(name: "DeepSeek", kind: .openAICompatible,
                                   baseURL: "https://api.deepseek.com", manualModels: ["fixture-model"])
@@ -140,5 +140,37 @@ struct ProofGenerationTests {
             #expect(repair.contains(proofPrompt))
             #expect(repair.contains(raw))
         }
+    }
+
+    @Test func cauchySchwarzSeventhBlockReachesPreviewAndWordWithoutAnotherRequest() async throws {
+        let reply = #"""
+        {"blocks":[
+          {"type":"paragraph","inlines":[{"text":"柯西–施瓦茨不等式"}]},
+          {"type":"paragraph","inlines":[{"text":"设 "},{"math":{"symbol":"x"}},{"text":" 与 "},{"math":{"symbol":"y"}},{"text":" 为内积空间中的向量。"}]},
+          {"type":"paragraph","inlines":[{"text":"以尖括号表示内积，双竖线表示由内积诱导的范数。"}]},
+          {"type":"paragraph","inlines":[{"text":"左端是内积的绝对值。"}]},
+          {"type":"paragraph","inlines":[{"text":"右端是两个范数的乘积。"}]},
+          {"type":"paragraph","inlines":[{"text":"表达式为"}]},
+          {"type":"equation","math":{"row":[
+            {"delimit":{"left":"|","right":"|","body":{"delimit":{"left":"⟨","right":"⟩","body":{"row":[{"type":"symbol","value":"x"},{"op":","},{"symbol":"y"}]}}}}},
+            {"type":"op","value":"≤"},
+            {"delimit":{"left":"‖","right":"‖","body":{"symbol":"x"}}},
+            {"delimit":{"left":"‖","right":"‖","body":{"symbol":"y"}}}
+          ]}}
+        ]}
+        """#
+        let api = client([reply])
+        let output = try await api.generate(account: account, modelID: "fixture-model",
+                                            instruction: "柯西-施瓦茨不等式的表达形式")
+        #expect(ProofTransport.requests.count == 1)
+        let preview = try XMLDocument(xmlString: "<preview>\(output.html())</preview>", options: [])
+        let equation = try #require(preview.nodes(forXPath: "//div[@data-path='/blocks/6']").first)
+        #expect(equation.stringValue == "|⟨x,y⟩|≤‖x‖‖y‖")
+        let word = try XMLDocument(xmlString: """
+            <w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">\(output.wordXML())</w:body>
+            """, options: [])
+        #expect(try word.nodes(forXPath: "//w:p[6]/w:r/w:t[.='表达式为']").count == 1)
+        #expect(try word.nodes(forXPath: "//w:p[7]/m:oMathPara/m:oMath//m:d").count == 4)
+        #expect(try word.nodes(forXPath: "//w:p[7]//m:t").compactMap(\.stringValue) == ["x", ",", "y", "≤", "x", "y"])
     }
 }

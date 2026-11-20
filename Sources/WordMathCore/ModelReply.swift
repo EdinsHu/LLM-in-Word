@@ -17,6 +17,22 @@ enum ModelReplyError: LocalizedError, Equatable {
 /// Finds a complete, unambiguous document without attempting to repair the model's math.
 enum ModelReply {
     static func parse(_ text: String) throws -> MathDocument {
+        let data = try documentJSON(text)
+        do {
+            do {
+                return try MathDocument.parse(String(decoding: data, as: UTF8.self))
+            } catch let error as ContentError {
+                guard let canonical = ModelReplyNormalization.canonicalJSON(data) else { throw error }
+                return try MathDocument.parse(canonical)
+            }
+        } catch let error as ContentError {
+            throw ModelReplyError.schema(error.localizedDescription)
+        } catch {
+            throw ModelReplyError.malformed
+        }
+    }
+
+    static func documentJSON(_ text: String) throws -> Data {
         let maxBytes = 1024 * 1024
         guard text.utf8.prefix(maxBytes + 1).count <= maxBytes else { throw ModelReplyError.tooLarge }
         let bytes = Array(text.utf8)
@@ -92,13 +108,7 @@ enum ModelReply {
             if foundJSON { throw ModelReplyError.schema("顶层对象应包含 blocks 数组。") }
             throw ModelReplyError.malformed
         }
-        do {
-            return try MathDocument.parse(String(decoding: bytes[candidate], as: UTF8.self))
-        } catch let error as ContentError {
-            throw ModelReplyError.schema(error.localizedDescription)
-        } catch {
-            throw ModelReplyError.malformed
-        }
+        return Data(bytes[candidate])
     }
 
     private static func isSpace(_ byte: UInt8) -> Bool {
