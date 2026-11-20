@@ -64,7 +64,7 @@ struct WordIntegrationTests {
 
         let anchor = try WordIntegration.capture()
         #expect(anchor.fontSize == 16)
-        let content = try MathDocument.parse(#"{"blocks":[{"type":"paragraph","inlines":[{"text":"结果"},{"math":{"frac":[{"symbol":"x"},{"number":"2"}]}}]}]}"#)
+        let content = try MathDocument.parse(#"{"blocks":[{"type":"paragraph","inlines":[{"text":"结果"},{"math":{"frac":[{"symbol":"x"},{"number":"2"}]}},{"text":"，"}]}]}"#)
         try WordIntegration.insert(content, at: anchor)
         let check = try word("""
             set d to document \(quotedName)
@@ -78,6 +78,25 @@ struct WordIntegrationTests {
         #expect(check.atIndex(5)?.int32Value == 1)
         #expect(check.atIndex(6)?.stringValue?.contains("后") == true)
         #expect(throws: (any Error).self) { try WordIntegration.insert(content, at: anchor) }
+
+        let secondPosition = try word("return selection start of selection").int32Value
+        let secondAnchor = try WordIntegration.capture()
+        #expect(secondAnchor.fontSize == 16)
+        let next = try MathDocument.parse(#"{"blocks":[{"type":"paragraph","inlines":[{"text":"再得"},{"math":{"sup":[{"symbol":"y"},{"number":"2"}]}},{"text":"。"}]}]}"#)
+        try WordIntegration.insert(next, at: secondAnchor)
+        let afterSecond = try word("""
+            set d to document \(quotedName)
+            set secondText to create range d start \(secondPosition) end \(secondPosition + 2)
+            set caret to selection start of selection
+            set followingText to create range d start caret end (caret + 1)
+            return {count math objects of text object of d, content of secondText, font size of font object of secondText, bold of font object of secondText, content of followingText, count paragraphs of d}
+            """)
+        #expect(afterSecond.atIndex(1)?.int32Value == 2)
+        #expect(afterSecond.atIndex(2)?.stringValue == "再得")
+        #expect(afterSecond.atIndex(3)?.doubleValue == 16)
+        #expect(afterSecond.atIndex(4)?.booleanValue == true)
+        #expect(afterSecond.atIndex(5)?.stringValue == "后")
+        #expect(afterSecond.atIndex(6)?.int32Value == 1)
     }
 
     @MainActor private func word(_ body: String) throws -> NSAppleEventDescriptor {
