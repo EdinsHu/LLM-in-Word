@@ -39,7 +39,8 @@ enum WordMathMain {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = ProviderSettings()
     let client = ProviderClient()
-    private var item: NSStatusItem!
+    private lazy var statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private lazy var statusMenu = StatusMenu(button: statusItem.button)
     private var hotKey: WordHotKey?
     private var input: InputPanel?
     private let wordID = "com.microsoft.Word"
@@ -49,17 +50,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installEditMenu()
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "function", accessibilityDescription: "WordMath")
-        item.button?.toolTip = "WordMath · 在 Word 中按 ⌃⌘M"
-        let menu = NSMenu()
-        menu.addItem(entry("在 Word 中输入…  ⌃⌘M", #selector(openInput)))
-        menu.addItem(entry("模型设置…", #selector(openSettings)))
-        menu.addItem(entry("启用光标定位…", #selector(requestCaretAccess)))
-        menu.addItem(.separator())
-        menu.addItem(entry("退出 WordMath", #selector(quit)))
-        item.menu = menu
-        hotKey = WordHotKey { [weak self] in self?.openInput() }
+        statusMenu.add("在 Word 中输入…  ⌃⌘M") { [weak self] in self?.openInput() }
+        statusMenu.add("模型设置…") { [weak self] in self?.openSettings() }
+        statusMenu.add("启用光标定位…") { [weak self] in self?.requestCaretAccess() }
+        statusMenu.addSeparator()
+        statusMenu.add("退出 WordMath") { [weak self] in self?.quit() }
+        hotKey = WordHotKey { [weak self] in
+            self?.statusMenu.afterDismissal { [weak self] in self?.openInput() }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(frontmostAppDidChange(_:)),
             name: NSWorkspace.didActivateApplicationNotification, object: nil)
         syncHotKey()
@@ -100,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func syncHotKey(for application: NSRunningApplication? = nil) {
         let inWord = (application ?? NSWorkspace.shared.frontmostApplication)?.bundleIdentifier == wordID
         if hotKey?.enable(inWord) == false {
-            item.button?.toolTip = "快捷键不可用；请从此菜单选择「在 Word 中输入」。"
+            statusItem.button?.toolTip = "快捷键不可用；请从此菜单选择「在 Word 中输入」。"
         }
     }
 
