@@ -1,0 +1,85 @@
+name: Publish WordMath release
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/release.json]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    concurrency: wordmath-release
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify the tested macOS package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          manifest=.github/release.json
+          version=$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$manifest")
+          source=$(jq -er '.commit | select(test("^[0-9a-f]{40}$"))' "$manifest")
+          checksum=$(jq -er '.sha256 | select(test("^[0-9a-f]{64}$"))' "$manifest")
+          run=$(jq -er '.run_id | numbers' "$manifest")
+          artifact=$(jq -er '.artifact_id | numbers' "$manifest")
+          archive="WordMath-$version-macOS-arm64.zip"
+          test -s "releases/v$version.md"
+          api="repos/$GITHUB_REPOSITORY/actions"
+          gh api "$api/runs/$run" | jq -e --arg sha "$source" '
+            .head_sha == $sha and .head_branch == "main" and .event == "push" and
+            .path == ".github/workflows/macos-package.yml" and .conclusion == "success"'
+          gh api "$api/artifacts/$artifact" | jq -e --argjson run "$run" --arg name "$archive" '
+            .workflow_run.id == $run and .name == $name and (.expired | not)'
+          gh api "$api/artifacts/$artifact/zip" > "$archive"
+          echo "$checksum  $archive" | sha256sum --check
+          unzip -tq "$archive"
+          unzip -p "$archive" WordMath.app/Contents/Info.plist > "$RUNNER_TEMP/Info.plist"
+          python3 - "$RUNNER_TEMP/Info.plist" "$version" <<'PY'
+          import plistlib, sys
+          with open(sys.argv[1], "rb") as info:
+              if plistlib.load(info)["CFBundleShortVersionString"] != sys.argv[2]:
+                  sys.exit("App version differs from release version")
+          PY
+          echo "TAG=v$version" >> "$GITHUB_ENV"
+          echo "SOURCE=$source" >> "$GITHUB_ENV"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+          echo "CHECKSUM=$checksum" >> "$GITHUB_ENV"
+      - name: Publish the verified package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY"
+          gh api "$api/git/matching-refs/tags/$TAG" | jq -e --arg tag "refs/tags/$TAG" --arg sha "$SOURCE" '
+            all(.[] | select(.ref == $tag); .object.sha == $sha)'
+          if ! gh release view "$TAG" --json databaseId,isDraft,targetCommitish,assets > "$RUNNER_TEMP/release.json"; then
+            gh release create "$TAG" --target "$SOURCE" --draft --title "WordMath ${TAG#v}" --notes-file "releases/$TAG.md"
+            gh release view "$TAG" --json databaseId,isDraft,targetCommitish,assets > "$RUNNER_TEMP/release.json"
+          fi
+          release="$RUNNER_TEMP/release.json"
+          jq -e --arg sha "$SOURCE" '.targetCommitish == $sha' "$release"
+          if jq -e '.isDraft and (.assets | length == 0)' "$release"; then
+            gh release upload "$TAG" "$ARCHIVE"
+          fi
+          release_id=$(jq -er '.databaseId' "$release")
+          gh api "$api/releases/$release_id" | jq -e --arg name "$ARCHIVE" --arg digest "sha256:$CHECKSUM" '
+            (.assets | length == 1) and .assets[0].name == $name and .assets[0].digest == $digest'
+          if jq -e '.isDraft' "$release"; then
+            gh release edit "$TAG" --draft=false --latest
+          fi
+      - name: Check the public download
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$ARCHIVE" -o "$RUNNER_TEMP/public.zip"
+          echo "$CHECKSUM  $RUNNER_TEMP/public.zip" | sha256sum --check

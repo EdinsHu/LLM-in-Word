@@ -2,6 +2,10 @@
 
 WordMath 是配合 Mac 版 Microsoft Word 使用的菜单栏应用。写到需要数学内容的位置，按 **⌃⌘M** 描述一个符号、矩阵或整段推导。预览并确认后，文字和可编辑的公式会插入原光标处。日常使用只需打开 Word 和 WordMath。
 
+## 下载与安装
+
+使用 Apple Silicon（M 系列）Mac 可从 [GitHub Releases](https://github.com/EdinsHu/LLM-in-Word/releases/latest) 下载安装包。解压后将 `WordMath.app` 拖入“应用程序”并打开。升级时请先从菜单栏退出旧版。
+
 ## 构建与启动
 
 运行需要 macOS 13 或更新版本、桌面版 Microsoft Word。构建需要 Swift 6 工具链，可使用包含 Swift 6 的 Xcode Command Line Tools 或 Xcode 16 及更新版本。在仓库目录运行：
