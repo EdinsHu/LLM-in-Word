@@ -63,6 +63,11 @@ struct ProviderCredential: Codable {
     let endpoint: URL
     let kind: ProviderKind
     let token: String
+
+    static func readStored(_ data: Data) throws -> Self {
+        do { return try JSONDecoder().decode(Self.self, from: data) }
+        catch { throw ProviderError.unreadableCredential }
+    }
 }
 
 protocol CredentialStorage {
@@ -84,10 +89,9 @@ struct KeychainCredentials: CredentialStorage {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else {
-            throw ProviderError.keychain(status)
-        }
-        return try JSONDecoder().decode(ProviderCredential.self, from: data)
+        guard status == errSecSuccess else { throw ProviderError.keychain(status) }
+        guard let data = result as? Data else { throw ProviderError.unreadableCredential }
+        return try ProviderCredential.readStored(data)
     }
 
     func put(_ credential: ProviderCredential?, for id: UUID) throws {
@@ -150,8 +154,10 @@ public final class ProviderSettings {
     }
 
     private func read() throws -> State {
-        guard let data = defaults.data(forKey: preference) else { return State() }
-        return try JSONDecoder().decode(State.self, from: data)
+        guard let stored = defaults.object(forKey: preference) else { return State() }
+        guard let data = stored as? Data else { throw ProviderError.unreadableSettings }
+        do { return try JSONDecoder().decode(State.self, from: data) }
+        catch { throw ProviderError.unreadableSettings }
     }
 
     public var accounts: [ProviderAccount] { (try? read().accounts) ?? [] }

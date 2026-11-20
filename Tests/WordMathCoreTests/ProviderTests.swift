@@ -146,6 +146,72 @@ struct ProviderTests {
         #expect(account.availableModels == ["model-A"])
     }
 
+    @Test func joinsOrderedTextPartsAcrossServices() async throws {
+        let sample = self.sample
+        let parts = [["type": "text", "text": String(sample.prefix(20))],
+                     ["type": "thinking", "text": "private internal reasoning"],
+                     ["type": "text", "text": String(sample.dropFirst(20))]]
+        for kind in ProviderKind.allCases {
+            var service = account
+            service.kind = kind
+            MockAPI.respond = { _ in
+                if kind == .anthropic { return (200, ["content": parts]) }
+                return (200, ["choices": [["message": ["content": parts]]]])
+            }
+            let output = try await client().generate(account: service, modelID: "m", instruction: "输入 z")
+            #expect(output == (try MathDocument.parse(sample)))
+        }
+    }
+
+    @Test func incompleteOrFilteredOutputReportsItsCause() async {
+        let message: [String: Any] = ["content": sample]
+        let cases: [(ProviderKind, [String: Any], ProviderError)] = [
+            (.openAICompatible, ["choices": [["finish_reason": "length", "message": message]]], .incompleteResponse),
+            (.openAICompatible, ["choices": [["finish_reason": "content_filter", "message": message]]], .refused),
+            (.openAICompatible, ["choices": [["message": ["refusal": "redacted"]]]], .refused),
+            (.openAICompatible, ["choices": [["message": ["content": [["type": "refusal"]]]]]], .refused),
+            (.openAICompatible, ["choices": [["message": ["content": NSNull()]]]], .emptyResponse),
+            (.openAICompatible, ["choices": [["finish_reason": "tool_calls", "message": message]]], .toolResponse),
+            (.anthropic, ["stop_reason": "max_tokens", "content": []], .incompleteResponse),
+            (.anthropic, ["stop_reason": "refusal", "content": []], .refused),
+            (.anthropic, ["content": [["type": "thinking", "thinking": "redacted"]]], .emptyResponse),
+            (.anthropic, ["content": [["type": "text", "text": 42]]], .invalidResponse)
+        ]
+        for (kind, payload, expected) in cases {
+            var service = account
+            service.kind = kind
+            MockAPI.respond = { _ in (200, payload) }
+            do {
+                _ = try await client().generate(account: service, modelID: "m", instruction: "输入 z")
+                Issue.record("Expected a provider error for incomplete or filtered output")
+            } catch {
+                #expect(error.localizedDescription == expected.localizedDescription)
+            }
+        }
+    }
+
+    @Test func corruptStoredStateReportsSourceAndPreservesData() throws {
+        let invalid = Data("invalid fixture".utf8)
+        do {
+            _ = try ProviderCredential.readStored(invalid)
+            Issue.record("Expected unreadable credential")
+        } catch ProviderError.unreadableCredential {}
+
+        let suite = "WordMath.tests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "WordMath.providerSettings.v1"
+        defaults.set(invalid, forKey: key)
+        let vault = MemoryCredentials()
+        let settings = ProviderSettings(defaults: defaults, credentials: vault)
+        do {
+            try settings.save(account: account, apiKey: "fixture")
+            Issue.record("Expected unreadable settings")
+        } catch ProviderError.unreadableSettings {}
+        #expect(defaults.data(forKey: key) == invalid)
+        #expect(vault.values.isEmpty)
+    }
+
     @Test func endpointValidation() {
         var draft = account
         for invalid in ["http://remote.test/v1", "https://user:secret@example.test/v1", "https://example.test/v1?q=secret"] {
