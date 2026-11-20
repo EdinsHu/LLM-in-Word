@@ -9,7 +9,7 @@
   const editValue = byID('editValue');
   const state = {
     draft: null, originalPrompt: '', mode: 'revision',
-    activeNode: null, scopePath: null, pending: null, busy: false
+    activeNode: null, scopePath: null, pending: null, busy: false, isExample: false
   };
   const post = message => window.webkit.messageHandlers.wordmath.postMessage(message);
   let lastHeight = 0;
@@ -34,7 +34,9 @@
   function controls() {
     const hasDraft = !!state.draft;
     const hasModels = model.options.length > 0;
-    byID('setupHint').hidden = hasModels;
+    byID('setupHint').hidden = hasModels || hasDraft;
+    byID('example').disabled = state.busy;
+    byID('previewHint').textContent = state.isExample ? '离线排版示例 · 点选文字或符号可编辑' : '点选文字或符号可编辑';
     model.hidden = !hasModels;
     byID('modeBar').hidden = byID('previewArea').hidden = !hasDraft;
     byID('generate').textContent = hasModels ? (hasDraft ? '更新预览' : '生成') : '配置服务';
@@ -77,7 +79,7 @@
 
   function start(config = {}) {
     Object.assign(state, { draft: null, originalPrompt: '', mode: 'revision',
-      activeNode: null, scopePath: null, pending: null, busy: false });
+      activeNode: null, scopePath: null, pending: null, busy: false, isExample: false });
     model.replaceChildren();
     preview.replaceChildren();
     preview.style.removeProperty('--word-font-family');
@@ -129,13 +131,16 @@
     }
   }
 
-  function result(draft, html) {
+  function result(draft, html, example = false) {
     if (typeof draft === 'string') draft = JSON.parse(draft);
     if (!draft || !Array.isArray(draft.blocks) || typeof html !== 'string') {
       error('无法显示排版预览，请重试。');
       return;
     }
-    if (state.pending && state.pending.mode !== 'revision') {
+    state.isExample = example || !state.pending || state.pending.mode === 'example';
+    if (state.isExample) {
+      state.originalPrompt = '编辑当前的数学排版示例';
+    } else if (state.pending.mode !== 'revision') {
       state.originalPrompt = state.pending.input;
     }
     state.draft = draft;
@@ -275,6 +280,12 @@
   });
   prompt.addEventListener('input', controls);
   byID('settings').addEventListener('click', () => post({ action: 'settings' }));
+  byID('example').addEventListener('click', () => {
+    if (state.busy) return;
+    state.pending = { mode: 'example' };
+    busy(true);
+    post({ action: 'example' });
+  });
   byID('cancel').addEventListener('click', () => post({ action: 'cancel' }));
   byID('insert').addEventListener('click', insert);
   byID('replaceMode').addEventListener('click', () => setMode('replace'));

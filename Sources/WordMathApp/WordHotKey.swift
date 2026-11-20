@@ -28,7 +28,7 @@ final class WordHotKey {
         if enabled && registration == nil {
             guard handler != nil else { return false }
             let identifier = EventHotKeyID(signature: 0x574D4154, id: 1)
-            return RegisterEventHotKey(UInt32(kVK_ANSI_M), UInt32(cmdKey | optionKey), identifier,
+            return RegisterEventHotKey(UInt32(kVK_ANSI_M), UInt32(cmdKey | controlKey), identifier,
                                        GetApplicationEventTarget(), 0, &registration) == noErr
         }
         if !enabled, let registration {

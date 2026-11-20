@@ -5,14 +5,19 @@ import WordMathCore
 @MainActor
 final class SettingsWindow: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
+    var onExample: (() -> Void)?
     private let window: NSWindow
     private let form: AccountForm
 
     init(settings: ProviderSettings, client: ProviderClient = ProviderClient(), onChange: @escaping () -> Void) {
         form = AccountForm(settings: settings, client: client, onChange: onChange)
-        window = NSWindow(contentViewController: NSHostingController(rootView: AccountSettingsView(form: form)))
+        window = NSWindow()
         super.init()
         window.delegate = self
+        window.contentViewController = NSHostingController(rootView: AccountSettingsView(form: form) { [weak self] in
+            self?.window.close()
+            self?.onExample?()
+        })
         window.title = "AI 服务与模型"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
@@ -181,6 +186,7 @@ private final class AccountForm: ObservableObject {
 
 private struct AccountSettingsView: View {
     @ObservedObject var form: AccountForm
+    let showExample: () -> Void
     @State private var confirmingRemoval = false
 
     var body: some View {
@@ -276,6 +282,8 @@ private struct AccountSettingsView: View {
                 HStack {
                     if form.saved {
                         Button("移除服务", role: .destructive) { confirmingRemoval = true }
+                    } else if form.accounts.isEmpty {
+                        Button("在 Word 中试用排版示例", action: showExample)
                     }
                     Spacer()
                     Button("保存设置") { form.save() }.keyboardShortcut(.defaultAction)

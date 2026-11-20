@@ -21,6 +21,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private var request: Task<Void, Never>?
     private var closed = false
     private var ready = false
+    private var exampleOnLoad = false
     private var choices: [String: (ProviderAccount, String)] = [:]
 
     init(anchor: WordAnchor, settings: ProviderSettings, client: ProviderClient,
@@ -51,7 +52,8 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         window.isReleasedWhenClosed = false
     }
 
-    func present(at location: NSRect?) {
+    func present(at location: NSRect?, showExample: Bool) {
+        exampleOnLoad = showExample
         caret = location ?? NSRect(origin: NSEvent.mouseLocation, size: .init(width: 1, height: 1))
         place(width: 620, height: 60)
         web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
@@ -106,6 +108,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let config: [String: Any] = ["models": list, "defaultModelID": preferred,
                                      "fontName": anchor.fontName, "fontSize": anchor.fontSize]
         js("WordMath.start(config)", ["config": config])
+        if exampleOnLoad { showExample() }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -125,6 +128,25 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         web.configuration.userContentController.removeScriptMessageHandler(forName: "wordmath")
         window.orderOut(nil)
         onClose()
+    }
+
+    /// A local fixture lets users try editable formatting and insertion before connecting an account.
+    func showExample() {
+        guard ready else { exampleOnLoad = true; return }
+        guard request == nil else { return }
+        let sample = """
+        {"blocks":[
+          {"type":"paragraph","inlines":[{"text":"设矩阵 "},{"math":{"symbol":"A"}},{"text":" 的特征多项式为"}]},
+          {"type":"equation","math":{"row":[{"symbol":"p"},{"delimit":{"left":"(","right":")","body":{"symbol":"λ"}}},{"op":"="},{"literal":"det"},{"delimit":{"left":"(","right":")","body":{"row":[{"symbol":"λ"},{"symbol":"I"},{"op":"−"},{"symbol":"A"}]}}}]}},
+          {"type":"paragraph","inlines":[{"text":"由哈密顿–凯莱定理，"},{"math":{"row":[{"symbol":"p"},{"delimit":{"left":"(","right":")","body":{"symbol":"A"}}},{"op":"="},{"number":"0"}]}},{"text":"。"}]}
+        ]}
+        """
+        do { try display(MathDocument.parse(sample)) }
+        catch { self.error(error.localizedDescription) }
+    }
+
+    private func display(_ result: MathDocument) throws {
+        js("WordMath.result(draft, html)", ["draft": try result.json(), "html": result.html()])
     }
 
     private func error(_ message: String) { js("WordMath.error(message)", ["message": message]) }
@@ -147,6 +169,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                 }
             case "cancel": close()
             case "settings": openSettings()
+            case "example": showExample()
             case "generate": try generate(body)
             case "insert":
                 guard request == nil else { return }
@@ -172,7 +195,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                 let result = try await client.generate(account: account, modelID: model, instruction: prompt,
                                                        originalPrompt: original, currentPreview: previous)
                 try Task.checkCancellation()
-                self?.js("WordMath.result(draft, html)", ["draft": try result.json(), "html": result.html()])
+                try self?.display(result)
             } catch {
                 if !Task.isCancelled { self?.error(error.localizedDescription) }
             }

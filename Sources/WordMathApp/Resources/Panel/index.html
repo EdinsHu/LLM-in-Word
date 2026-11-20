@@ -26,7 +26,7 @@
       <button type="button" class="icon settings" id="settings" aria-label="AI 服务设置" title="AI 服务设置">⚙</button>
       <button id="generate" type="submit" class="primary">生成</button>
     </form>
-    <p id="setupHint" hidden>首次使用，请先连接 AI 服务并选择模型。</p>
+    <p id="setupHint" hidden>连接 AI 服务后即可生成内容，也可以先<button type="button" id="example">试用排版示例</button>。</p>
     <p id="status" role="status" aria-live="polite" hidden></p>
     <section id="previewArea" aria-label="待插入内容" hidden>
       <div id="preview" tabindex="0" aria-label="排版预览，点选文字或符号可编辑。左右方向键选择，回车编辑。"></div>
@@ -37,7 +37,7 @@
         <button id="followSelection" type="button">针对选区追问</button>
       </div>
       <footer>
-        <span>点选文字或符号可编辑</span>
+        <span id="previewHint">点选文字或符号可编辑</span>
         <button id="cancel" type="button">取消</button>
         <button id="insert" type="button" class="primary">插入 Word <kbd>⌘↵</kbd></button>
       </footer>

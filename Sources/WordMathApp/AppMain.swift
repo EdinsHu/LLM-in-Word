@@ -29,9 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installEditMenu()
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "function", accessibilityDescription: "WordMath")
-        item.button?.toolTip = "WordMath · 在 Word 中按 ⌥⌘M"
+        item.button?.toolTip = "WordMath · 在 Word 中按 ⌃⌘M"
         let menu = NSMenu()
-        menu.addItem(entry("在 Word 中输入…  ⌥⌘M", #selector(openInput)))
+        menu.addItem(entry("在 Word 中输入…  ⌃⌘M", #selector(openInput)))
         menu.addItem(entry("模型设置…", #selector(openSettings)))
         menu.addItem(entry("启用光标定位…", #selector(requestCaretAccess)))
         menu.addItem(.separator())
@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         input?.hideForSettings()
+        preferences.onExample = { [weak self] in self?.presentInput(showExample: true) }
         preferences.onClose = { [weak self] in self?.input?.focus() }
         preferences.show()
     }
@@ -81,8 +82,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = AXIsProcessTrustedWithOptions(options)
     }
 
-    @objc private func openInput() {
-        if let input { input.focus(); return }
+    @objc private func openInput() { presentInput(showExample: false) }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { openSettings() }
+        return true
+    }
+
+    private func presentInput(showExample: Bool) {
+        if let input {
+            input.focus()
+            if showExample { input.showExample() }
+            return
+        }
         do {
             let anchor = try WordIntegration.capture()
             let panel = try InputPanel(anchor: anchor, settings: settings, client: client,
@@ -93,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .first?.activate(options: [.activateIgnoringOtherApps])
             })
             input = panel
-            panel.present(at: WordIntegration.caretRect())
+            panel.present(at: WordIntegration.caretRect(), showExample: showExample)
         } catch {
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
