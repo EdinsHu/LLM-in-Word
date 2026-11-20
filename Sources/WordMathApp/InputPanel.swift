@@ -19,6 +19,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private let page: URL
     private var caret = NSRect.zero
     private var request: Task<Void, Never>?
+    private var failedReply: ModelFormattingError?
     private var closed = false
     private var ready = false
     private var exampleOnLoad = false
@@ -171,6 +172,8 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             case "settings": openSettings()
             case "example": showExample()
             case "generate": try generate(body)
+            case "repair": try repair()
+            case "discardRepair": failedReply = nil
             case "insert":
                 guard request == nil else { return }
                 try WordIntegration.insert(readDocument(body["document"]), at: anchor)
@@ -189,15 +192,46 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             previous = try readDocument(value).json()
         }
         let original = body["originalPrompt"] as? String
-        request = Task { [weak self, client] in
+        failedReply = nil
+        run { [client] receipt in
+            try await client.generate(account: account, modelID: model, instruction: prompt,
+                                      originalPrompt: original, currentPreview: previous, onReceipt: receipt)
+        }
+    }
+
+    private func repair() throws {
+        guard request == nil else { return }
+        guard let failure = failedReply,
+              let current = settings.accounts.first(where: { $0.id == failure.account.id }),
+              current.baseURL == failure.account.baseURL, current.kind == failure.account.kind,
+              current.availableModels.contains(failure.modelID) else {
+            failedReply = nil
+            throw ProviderError.invalidModel
+        }
+        run { [client] receipt in try await client.repair(failure, onReceipt: receipt) }
+    }
+
+    private func run(_ operation: @escaping (@escaping (ProviderReceipt) -> Void) async throws -> MathDocument) {
+        request = Task { [weak self] in
             defer { self?.request = nil }
             do {
-                let result = try await client.generate(account: account, modelID: model, instruction: prompt,
-                                                       originalPrompt: original, currentPreview: previous)
+                let result = try await operation { [weak self] receipt in
+                    Task { @MainActor in self?.js("WordMath.receipt(message)", ["message": receipt.summary]) }
+                }
                 try Task.checkCancellation()
+                self?.failedReply = nil
                 try self?.display(result)
+            } catch let failure as ModelFormattingError {
+                guard !Task.isCancelled else { return }
+                self?.failedReply = failure
+                self?.js("WordMath.formatError(message)", ["message": failure.localizedDescription])
             } catch {
-                if !Task.isCancelled { self?.error(error.localizedDescription) }
+                guard !Task.isCancelled else { return }
+                if self?.failedReply != nil {
+                    self?.js("WordMath.formatError(message)", ["message": error.localizedDescription])
+                } else {
+                    self?.error(error.localizedDescription)
+                }
             }
         }
     }

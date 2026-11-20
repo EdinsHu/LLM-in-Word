@@ -6,8 +6,8 @@
 <key>CFBundleIdentifier</key><string>org.llminword.WordMath</string>
 <key>CFBundleExecutable</key><string>WordMath</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>2</string>
-<key>CFBundleShortVersionString</key><string>0.1.1</string>
+<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleShortVersionString</key><string>0.1.2</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
 <key>NSAppleEventsUsageDescription</key><string>WordMath 需要读取 Word 插入点的格式，并在你确认后插入可编辑的正文和公式。</string>

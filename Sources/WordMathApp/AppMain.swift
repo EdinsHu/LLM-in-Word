@@ -69,6 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installEditMenu() {
         let menu = NSMenu()
         let application = NSMenu(title: "WordMath")
+        application.addItem(entry("在 Word 中输入…", #selector(openInput)))
+        application.addItem(.separator())
         application.addItem(withTitle: "退出 WordMath", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let applicationItem = NSMenuItem()
         applicationItem.submenu = application

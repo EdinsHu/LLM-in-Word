@@ -31,6 +31,13 @@
     line.classList.toggle('error', isError);
   }
 
+  function receipt(message) {
+    const line = byID('receipt');
+    line.textContent = typeof message === 'string' ? message.trim() : '';
+    line.hidden = !line.textContent;
+    resizePanel();
+  }
+
   function controls() {
     const hasDraft = !!state.draft;
     const hasModels = model.options.length > 0;
@@ -50,6 +57,7 @@
       ? (state.mode === 'revision' ? '描述要修改的地方…' : '重新描述所需内容…')
       : '描述符号、公式或推导…';
     byID('scope').hidden = !state.scopePath;
+    byID('repairBar').hidden = state.busy || !state.pending?.offerRepair;
     byID('editBar').hidden = !state.activeNode || state.busy;
     panel.setAttribute('aria-busy', String(state.busy));
     resizePanel();
@@ -67,6 +75,7 @@
     const ids = Array.from(model.options, entry => entry.value);
     const selected = [previous, preferredID, ids[0]].find(value => ids.includes(value));
     if (selected !== undefined) model.value = selected;
+    if (model.value !== previous) discardRepair();
     controls();
   }
 
@@ -92,6 +101,7 @@
     }
     prompt.value = '';
     status();
+    receipt('');
     setModels(config.models, config.defaultModelID);
     prompt.focus();
   }
@@ -163,6 +173,39 @@
     prompt.focus();
   }
 
+  function discardRepair() {
+    if (!state.pending) return;
+    if (state.pending.offerRepair) {
+      state.pending.offerRepair = false;
+      status();
+      post({ action: 'discardRepair' });
+    }
+    state.pending.repairEligible = false;
+  }
+
+  function sameRepairRequest() {
+    const request = state.pending;
+    return request?.repairEligible && request.modelID === model.value && request.input === prompt.value.trim();
+  }
+
+  function formatError(message) {
+    if (!sameRepairRequest()) { error(message); return; }
+    state.busy = false;
+    state.pending.offerRepair = true;
+    status(String(message), true);
+    controls();
+    prompt.focus();
+  }
+
+  function repair() {
+    if (state.busy || !state.pending?.offerRepair || !sameRepairRequest()) return;
+    state.pending.offerRepair = false;
+    receipt('');
+    status('正在修复排版…');
+    busy(true);
+    post({ action: 'repair' });
+  }
+
   function busy(value) {
     state.busy = Boolean(value);
     if (!value && !byID('status').classList.contains('error')) status();
@@ -191,6 +234,7 @@
       editValue.focus();
       return false;
     }
+    if (target.parent[target.key] !== value) discardRepair();
     target.parent[target.key] = value;
     state.activeNode.textContent = value;
     return true;
@@ -198,6 +242,7 @@
 
   function activate(element, edit) {
     if (!element || state.busy || (state.activeNode && !applyEdit())) return;
+    discardRepair();
     clearSelection();
     const path = element.getAttribute('data-path');
     if (!path) return;
@@ -220,7 +265,9 @@
   }
 
   function finishEdit(follow) {
+    if (state.busy) return;
     if (!applyEdit()) return;
+    discardRepair();
     const node = state.activeNode;
     if (!follow) clearSelection();
     else {
@@ -234,6 +281,7 @@
 
   function setMode(mode) {
     if (state.busy || state.mode === mode || !applyEdit()) return;
+    discardRepair();
     clearSelection();
     state.mode = mode;
     prompt.value = mode === 'replace' ? state.originalPrompt : '';
@@ -251,7 +299,8 @@
     const isRevision = !!state.draft && state.mode === 'revision';
     const scope = isRevision && state.scopePath;
     const instruction = scope ? input + '\n本次重点修改当前预览中 JSON Pointer 为 ' + scope + ' 的选区。' : input;
-    state.pending = { mode: isRevision ? 'revision' : 'new', input };
+    state.pending = { mode: isRevision ? 'revision' : 'new', input, modelID: model.value, repairEligible: true };
+    receipt('');
     status(isRevision ? '正在更新预览…' : '正在生成预览…');
     busy(true);
     post({ action: 'generate', prompt: instruction, modelID: model.value,
@@ -259,8 +308,16 @@
       document: isRevision ? state.draft : null, selectionPath: scope || null });
   }
 
+  function cancel() {
+    state.pending = null;
+    status();
+    controls();
+    post({ action: 'cancel' });
+  }
+
   function insert() {
     if (!state.draft || state.busy || !applyEdit()) return;
+    discardRepair();
     status('正在插入 Word…');
     busy(true);
     post({ action: 'insert', document: state.draft });
@@ -278,15 +335,20 @@
     event.preventDefault();
     if (!finishingComposition()) generate();
   });
-  prompt.addEventListener('input', controls);
+  for (const input of [prompt, editValue]) {
+    input.addEventListener('input', () => { discardRepair(); controls(); });
+  }
+  model.addEventListener('change', () => { discardRepair(); controls(); });
+  byID('repair').addEventListener('click', repair);
   byID('settings').addEventListener('click', () => post({ action: 'settings' }));
   byID('example').addEventListener('click', () => {
     if (state.busy) return;
     state.pending = { mode: 'example' };
+    receipt('');
     busy(true);
     post({ action: 'example' });
   });
-  byID('cancel').addEventListener('click', () => post({ action: 'cancel' }));
+  byID('cancel').addEventListener('click', cancel);
   byID('insert').addEventListener('click', insert);
   byID('replaceMode').addEventListener('click', () => setMode('replace'));
   byID('revisionMode').addEventListener('click', () => setMode('revision'));
@@ -318,11 +380,11 @@
       event.preventDefault();
       if (state.activeNode && document.activeElement === editValue) {
         clearSelection(); controls(); prompt.focus();
-      } else post({ action: 'cancel' });
+      } else cancel();
     } else if (event.key === 'Enter' && document.activeElement === editValue) {
       event.preventDefault(); finishEdit(false);
     }
   });
   new ResizeObserver(resizePanel).observe(panel);
-  window.WordMath = Object.freeze({ start, result, error, busy, setModels });
+  window.WordMath = Object.freeze({ start, result, error, formatError, receipt, busy, setModels });
 })();
