@@ -109,6 +109,73 @@ struct ProviderTests {
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    @Test func repeatedRepairKeepsOriginalSlotsAndUsesLatestDiagnostic() async throws {
+        let first = #"{"type":"paragraph","inlines":[{"text":"已核对的前言"}]}"#
+        let last = #"{"type":"paragraph","inlines":[{"text":"保留此处手动修改"}]}"#
+        let bad = #"{"type":"equation","math":{"sup":[{"symbol":"x"}]}}"#
+        let wrong = #"{"type":"equation","math":{"frac":[{"number":"1"}]}}"#
+        let fixed = #"{"type":"equation","math":{"sup":[{"symbol":"x"},{"number":"2"}]}}"#
+        func document(_ blocks: [String]) -> String {
+            "{\"blocks\":[" + blocks.joined(separator: ",") + "]}"
+        }
+        let source = document([first, bad, last])
+        let changedGoodBlock = #"{"type":"paragraph","inlines":[{"text":"新改的前言"}]}"#
+        let wrongFullReply = document([changedGoodBlock, fixed, last])
+        let secondAttempt = document([wrong])
+        let responses = [source, wrongFullReply, secondAttempt, document([fixed])]
+        let prompt = "柯西-施瓦茨不等式的表达形式"
+        let api = client()
+        var contexts: [[String: String]] = []
+        MockAPI.respond = { request in
+            let body = try Self.jsonBody(request)
+            let messages = try #require(body["messages"] as? [[String: String]])
+            let text = try #require(messages.last?["content"])
+            let context = try #require(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: String])
+            let index = contexts.count
+            try #require(index < responses.count)
+            contexts.append(context)
+            return (200, ["choices": [["message": ["content": responses[index]]]]])
+        }
+        var failure: ModelFormattingError?
+        var receipts = 0
+        for attempt in 0..<3 {
+            do {
+                if attempt == 0 {
+                    _ = try await api.generate(account: account, modelID: "model-A", instruction: prompt,
+                                               currentPreview: document([first]), onReceipt: { _ in receipts += 1 })
+                } else {
+                    let previous = try #require(failure)
+                    _ = try await api.repair(previous, onReceipt: { _ in receipts += 1 })
+                }
+                Issue.record("Expected an invalid document or scoped repair")
+            } catch let error as ModelFormattingError {
+                failure = error
+            }
+            #expect(contexts.count == attempt + 1)
+            #expect(receipts == attempt + 1)
+        }
+        let previous = try #require(failure)
+        let result = try await api.repair(previous, onReceipt: { _ in receipts += 1 })
+        #expect(result == (try MathDocument.parse(document([first, fixed, last]))))
+        #expect(receipts == 4)
+        #expect(contexts.count == 4)
+        for context in contexts.dropFirst() {
+            let target = try #require(context["answer_to_format"])
+            let object = try #require(JSONSerialization.jsonObject(with: Data(target.utf8)) as? [String: Any])
+            let blocks = try #require(object["blocks"] as? [[String: Any]])
+            #expect(blocks.count == 1)
+            #expect(target.contains("sup"))
+            #expect(!target.contains("已核对") && !target.contains("手动修改"))
+            #expect(context["current_preview"] == nil)
+            #expect(context["instruction"] == prompt)
+            #expect(context["format_issue"]?.isEmpty == false)
+        }
+        #expect(contexts[1]["last_attempt"] == nil)
+        #expect(contexts[2]["last_attempt"]?.contains("新改的前言") == true)
+        #expect(contexts[3]["last_attempt"] == secondAttempt)
+        #expect(contexts[3]["format_issue"] == previous.localizedDescription)
+    }
+
     @Test func anthropicPaginationAndGeneration() async throws {
         var claude = account
         claude.kind = .anthropic

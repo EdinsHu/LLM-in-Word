@@ -25,8 +25,14 @@
   $('repair').click();
   assert($('receipt').hidden, 'A repair request must clear the previous receipt.');
   assert(calls('repair').length === 1, 'Repeated clicks during a request must send only one call.');
-  WordMath.formatError('请求失败，可重试');
+  WordMath.receipt('模型 A · 请求 ID 234');
+  WordMath.formatError('第 7 个内容块：格式错误');
+  assert($('status').textContent.includes('修复排版未完成') && $('status').textContent.includes('第 7 个内容块'),
+    'A failed repair must show both the failed operation and its latest diagnostic.');
+  assert(!$('repairBar').hidden && calls('repair').length === 1 &&
+    $('receipt').textContent.includes('234'), 'A second failure should only offer a user-triggered retry with its own receipt.');
   $('repair').click();
+  assert(calls('repair').length === 2 && $('receipt').hidden, 'Retry must send one new request and clear the receipt.');
   const draft = { blocks: [{ type: 'paragraph', inlines: [{ text: '矩阵' }] }] };
   const html = '<p><span data-edit="text" data-path="/blocks/0/inlines/0/text">矩阵</span></p>';
   WordMath.receipt('模型 A · 请求 ID 456');
@@ -55,6 +61,14 @@
   WordMath.formatError('格式错误');
   $('preview').querySelector('span').click();
   assert(calls('discardRepair').length === 3 && $('repairBar').hidden, 'Editing the preview must invalidate the repair.');
+  generate('只修改系数');
+  // The status menu can change the available models even during a request.
+  WordMath.setModels([{ id: 'a', label: 'A' }], 'a');
+  WordMath.formatError('先前模型的回复格式错误');
+  assert(calls('discardRepair').length === 4 && $('repairBar').hidden,
+    'A format failure arriving after an in-flight model change must discard the newly retained native reply.');
+  $('repair').click();
+  assert(calls('repair').length === 2, 'Changing model during a request must not enable a repair on the previous account.');
   assert(!calls('insert').length, 'Repair must never insert the preview into Word.');
   return 'PASS';
 })();

@@ -189,10 +189,16 @@
   }
 
   function formatError(message) {
-    if (!sameRepairRequest()) { error(message); return; }
+    if (!sameRepairRequest()) {
+      // The model list can change in Settings while a request is running.
+      // Native code has only just retained the failed response.
+      post({ action: 'discardRepair' });
+      error(message);
+      return;
+    }
     state.busy = false;
     state.pending.offerRepair = true;
-    status(String(message), true);
+    status(state.pending.repairAttempted ? '修复排版未完成。' + message : String(message), true);
     controls();
     prompt.focus();
   }
@@ -200,6 +206,7 @@
   function repair() {
     if (state.busy || !state.pending?.offerRepair || !sameRepairRequest()) return;
     state.pending.offerRepair = false;
+    state.pending.repairAttempted = true;
     receipt('');
     status('正在修复排版…');
     busy(true);
