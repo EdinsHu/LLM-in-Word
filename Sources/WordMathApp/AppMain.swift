@@ -37,15 +37,18 @@ enum WordMathMain {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let settings = ProviderSettings()
+    let settings: ProviderSettings
     let client = ProviderClient()
     private lazy var statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private lazy var statusMenu = StatusMenu(button: statusItem.button)
     private var hotKey: WordHotKey?
     private var input: InputPanel?
     private let wordID = "com.microsoft.Word"
-    private lazy var preferences = SettingsWindow(settings: settings, client: client) { [weak self] in
-        self?.input?.refreshModels()
+    private var preferences: SettingsWindow?
+
+    init(settings: ProviderSettings = ProviderSettings()) {
+        self.settings = settings
+        super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -64,10 +67,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settings.accounts.isEmpty { openSettings() }
     }
 
-    private func installEditMenu() {
+    func installEditMenu() {
         let menu = NSMenu()
         let application = NSMenu(title: "WordMath")
         application.addItem(entry("在 Word 中输入…", #selector(openInput)))
+        application.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         application.addItem(.separator())
         application.addItem(withTitle: "退出 WordMath", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let applicationItem = NSMenuItem()
@@ -103,10 +107,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
+        showSettings(returningTo: nil)
+    }
+
+    private func showSettings(returningTo panel: InputPanel?) {
+        let window = preferences ?? SettingsWindow(settings: settings, client: client) { [weak self] in
+            self?.input?.refreshModels()
+        }
+        preferences = window
         input?.hideForSettings()
-        preferences.onExample = { [weak self] in self?.presentInput(showExample: true) }
-        preferences.onClose = { [weak self] in self?.input?.focus() }
-        preferences.show()
+        window.onExample = { [weak self] in self?.presentInput(showExample: true) }
+        window.onClose = { [weak self, weak panel] in
+            // AppKit is still closing the key window in windowWillClose.
+            DispatchQueue.main.async {
+                guard let self, let panel, self.input === panel, self.preferences?.isVisible == false else { return }
+                panel.focus()
+            }
+        }
+        window.show()
     }
 
     @objc private func requestCaretAccess() {
@@ -124,29 +142,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func receiveReopen(_ notification: Notification) { reopenExistingWindow() }
 
     private func reopenExistingWindow() {
-        if let input, !preferences.isVisible {
+        if let preferences, preferences.isVisible {
+            preferences.show()
+        } else if let input {
             input.focus()
-        } else {
-            openSettings()
         }
     }
 
     private func presentInput(showExample: Bool) {
         if let input {
+            preferences?.hideForInput()
             input.focus()
             if showExample { input.showExample() }
             return
         }
         do {
             let anchor = try WordIntegration.capture()
-            let panel = try InputPanel(anchor: anchor, settings: settings, client: client,
-                                       openSettings: { [weak self] in self?.openSettings() },
-                                       onClose: { [weak self] in
-                self?.input = nil
-                NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word")
-                    .first?.activate(options: [.activateIgnoringOtherApps])
-            })
+            let panel = try InputPanel(
+                anchor: anchor, settings: settings, client: client,
+                openSettings: { [weak self] in
+                    guard let self else { return }
+                    self.showSettings(returningTo: self.input)
+                },
+                onClose: { [weak self] in
+                    self?.input = nil
+                    NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word")
+                        .first?.activate(options: [.activateIgnoringOtherApps])
+                })
             input = panel
+            preferences?.hideForInput()
             panel.present(at: WordIntegration.caretRect(), showExample: showExample)
         } catch {
             NSApp.activate(ignoringOtherApps: true)

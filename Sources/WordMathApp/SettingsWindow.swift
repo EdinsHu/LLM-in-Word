@@ -12,26 +12,37 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
     init(settings: ProviderSettings, client: ProviderClient = ProviderClient(), onChange: @escaping () -> Void) {
         form = AccountForm(settings: settings, client: client, onChange: onChange)
-        window = NSWindow()
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 730, height: 515),
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                          backing: .buffered, defer: false)
         super.init()
         window.delegate = self
-        window.contentViewController = NSHostingController(rootView: AccountSettingsView(form: form) { [weak self] in
-            self?.window.close()
-            self?.onExample?()
-        })
+        window.contentViewController = NSHostingController(rootView: AccountSettingsView(form: form,
+            showExample: { [weak self] in self?.onExample?() },
+            close: { [weak self] in self?.window.performClose(nil) }))
         window.title = "AI 服务与模型"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         window.setContentSize(NSSize(width: 730, height: 515))
         window.minSize = NSSize(width: 660, height: 480)
         window.center()
         window.setFrameAutosaveName("WordMathSettings")
     }
 
-    func windowWillClose(_ notification: Notification) { onClose?() }
+    func windowWillClose(_ notification: Notification) {
+        let completion = onClose
+        onClose = nil
+        completion?()
+    }
+
+    func hideForInput() {
+        onClose = nil
+        window.orderOut(nil)
+    }
 
     func show() {
         NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
     }
 }
@@ -188,6 +199,7 @@ private final class AccountForm: ObservableObject {
 private struct AccountSettingsView: View {
     @ObservedObject var form: AccountForm
     let showExample: () -> Void
+    let close: () -> Void
     @State private var confirmingRemoval = false
 
     var body: some View {
@@ -287,6 +299,7 @@ private struct AccountSettingsView: View {
                         Button("在 Word 中试用排版示例", action: showExample)
                     }
                     Spacer()
+                    Button("关闭", action: close).keyboardShortcut(.cancelAction)
                     Button("保存设置") { form.save() }.keyboardShortcut(.defaultAction)
                         .disabled(form.isLoading)
                 }
