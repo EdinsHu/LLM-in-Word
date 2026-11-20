@@ -13,6 +13,10 @@ open dist/WordMath.app
 
 启动后，菜单栏会出现函数符号。长期使用可将 `dist/WordMath.app` 拖入“应用程序”，再将它添加到“系统设置 → 通用 → 登录项”。
 
+WordMath 在同一用户会话中只运行一个实例。再次双击应用或执行 `open dist/WordMath.app` 时，已有预览会回到前台；没有预览时会打开模型设置。
+
+从支持单实例之前的版本升级时，先点菜单栏中的函数符号，选择“退出 WordMath”。如果有多个 WordMath 图标，请逐个退出；也可在“活动监视器”中搜索 WordMath，退出剩余的旧进程。随后替换应用并启动新版本。
+
 ## 首次连接模型
 
 1. 打开菜单栏中的“模型设置…”。首次运行会自动打开这个窗口。也可先在一份空白 Word 文档中放好光标，点「在 Word 中试用排版示例」体验本地预览和插入。
@@ -48,3 +52,7 @@ open dist/WordMath.app
 ```sh
 WORDMATH_LIVE_TEST=1 ./scripts/test.sh --filter testLiveInsertion
 ```
+
+## 许可证
+
+本项目采用 [MIT 许可证](LICENSE)，版权所有者为 EdinsHu。

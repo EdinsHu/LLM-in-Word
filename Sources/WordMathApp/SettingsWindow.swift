@@ -6,6 +6,7 @@ import WordMathCore
 final class SettingsWindow: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
     var onExample: (() -> Void)?
+    var isVisible: Bool { window.isVisible }
     private let window: NSWindow
     private let form: AccountForm
 

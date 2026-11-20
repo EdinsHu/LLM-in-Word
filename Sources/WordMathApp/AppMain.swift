@@ -2,14 +2,36 @@ import AppKit
 import ApplicationServices
 import WordMathCore
 
+private let reopenRequest = Notification.Name("org.llminword.WordMath.showExistingWindow")
+
 @main
 enum WordMathMain {
     @MainActor static func main() {
-        let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
-        let delegate = AppDelegate()
-        app.delegate = delegate
-        withExtendedLifetime(delegate) { app.run() }
+        do {
+            guard let owner = try SingleInstanceLock.acquire() else {
+                DistributedNotificationCenter.default().postNotificationName(
+                    reopenRequest, object: nil, userInfo: nil, deliverImmediately: true)
+                return
+            }
+            withExtendedLifetime(owner) {
+                let app = NSApplication.shared
+                app.setActivationPolicy(.accessory)
+                let delegate = AppDelegate()
+                app.delegate = delegate
+                DistributedNotificationCenter.default().addObserver(delegate,
+                    selector: #selector(AppDelegate.receiveReopen(_:)), name: reopenRequest,
+                    object: nil, suspensionBehavior: .deliverImmediately)
+                withExtendedLifetime(delegate) { app.run() }
+            }
+        } catch {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            app.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "无法启动 WordMath"
+            alert.informativeText = "无法取得本用户的运行锁。\n" + error.localizedDescription
+            alert.runModal()
+        }
     }
 }
 
@@ -38,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(entry("退出 WordMath", #selector(quit)))
         item.menu = menu
         hotKey = WordHotKey { [weak self] in self?.openInput() }
-        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(syncHotKey),
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(frontmostAppDidChange(_:)),
             name: NSWorkspace.didActivateApplicationNotification, object: nil)
         syncHotKey()
         if settings.accounts.isEmpty { openSettings() }
@@ -68,8 +90,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return result
     }
 
-    @objc private func syncHotKey() {
-        let inWord = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == wordID
+    @objc private func frontmostAppDidChange(_ note: Notification) {
+        let active = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        syncHotKey(for: active)
+    }
+
+    private func syncHotKey(for application: NSRunningApplication? = nil) {
+        let inWord = (application ?? NSWorkspace.shared.frontmostApplication)?.bundleIdentifier == wordID
         if hotKey?.enable(inWord) == false {
             item.button?.toolTip = "快捷键不可用；请从此菜单选择「在 Word 中输入」。"
         }
@@ -90,8 +117,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openInput() { presentInput(showExample: false) }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { openSettings() }
-        return true
+        reopenExistingWindow()
+        return false
+    }
+
+    @objc func receiveReopen(_ notification: Notification) { reopenExistingWindow() }
+
+    private func reopenExistingWindow() {
+        if let input, !preferences.isVisible {
+            input.focus()
+        } else {
+            openSettings()
+        }
     }
 
     private func presentInput(showExample: Bool) {
