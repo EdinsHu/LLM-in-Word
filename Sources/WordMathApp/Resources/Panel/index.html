@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Word 数学输入</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <main id="panel">
+    <div id="modeBar" class="mode-bar" hidden>
+      <div class="mode-options" role="group" aria-label="输入方式">
+        <button id="revisionMode" type="button" aria-pressed="true">继续修改</button>
+        <button id="replaceMode" type="button" aria-pressed="false">重新描述</button>
+      </div>
+      <span id="scope">
+        <span id="scopeLabel"></span>
+        <button id="clearScope" class="icon" type="button" aria-label="取消选区" title="取消选区">×</button>
+      </span>
+    </div>
+    <form id="promptForm">
+      <input id="prompt" aria-label="自然语言描述" type="text" autocomplete="off" placeholder="描述符号、公式或推导…">
+      <select id="model" aria-label="本次使用的模型" title="本次使用的模型"></select>
+      <button type="button" class="icon settings" id="settings" aria-label="AI 服务设置" title="AI 服务设置">⚙</button>
+      <button id="generate" type="submit" class="primary">生成</button>
+    </form>
+    <p id="setupHint" hidden>首次使用，请先连接 AI 服务并选择模型。</p>
+    <p id="status" role="status" aria-live="polite" hidden></p>
+    <section id="previewArea" aria-label="待插入内容" hidden>
+      <div id="preview" tabindex="0" aria-label="排版预览，点选文字或符号可编辑。左右方向键选择，回车编辑。"></div>
+      <div id="editBar" hidden>
+        <label for="editValue">编辑选中内容</label>
+        <input id="editValue" type="text" autocomplete="off">
+        <button id="applyEdit" type="button">应用</button>
+        <button id="followSelection" type="button">针对选区追问</button>
+      </div>
+      <footer>
+        <span>点选文字或符号可编辑</span>
+        <button id="cancel" type="button">取消</button>
+        <button id="insert" type="button" class="primary">插入 Word <kbd>⌘↵</kbd></button>
+      </footer>
+    </section>
+  </main>
+</body>
+</html>

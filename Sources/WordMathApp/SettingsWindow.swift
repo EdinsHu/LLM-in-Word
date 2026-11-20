@@ -3,13 +3,16 @@ import SwiftUI
 import WordMathCore
 
 @MainActor
-final class SettingsWindow {
+final class SettingsWindow: NSObject, NSWindowDelegate {
+    var onClose: (() -> Void)?
     private let window: NSWindow
     private let form: AccountForm
 
     init(settings: ProviderSettings, client: ProviderClient = ProviderClient(), onChange: @escaping () -> Void) {
         form = AccountForm(settings: settings, client: client, onChange: onChange)
         window = NSWindow(contentViewController: NSHostingController(rootView: AccountSettingsView(form: form)))
+        super.init()
+        window.delegate = self
         window.title = "AI 服务与模型"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
@@ -18,6 +21,8 @@ final class SettingsWindow {
         window.center()
         window.setFrameAutosaveName("WordMathSettings")
     }
+
+    func windowWillClose(_ notification: Notification) { onClose?() }
 
     func show() {
         NSApp.activate(ignoringOtherApps: true)
@@ -62,8 +67,9 @@ private final class AccountForm: ObservableObject {
         self.settings = settings
         self.client = client
         self.onChange = onChange
-        accounts = settings.accounts
-        draft = accounts.first ?? AccountPreset.openAI.account
+        let savedAccounts = settings.accounts
+        accounts = savedAccounts
+        draft = savedAccounts.first ?? AccountPreset.openAI.account
         load(draft)
     }
 
