@@ -218,7 +218,7 @@ struct ProviderTests {
         let parts = [["type": "text", "text": String(sample.prefix(20))],
                      ["type": "thinking", "text": "private internal reasoning"],
                      ["type": "text", "text": String(sample.dropFirst(20))]]
-        for kind in ProviderKind.allCases {
+        for kind in [ProviderKind.openAICompatible, .anthropic] {
             var service = account
             service.kind = kind
             MockAPI.respond = { _ in

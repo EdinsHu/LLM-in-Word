@@ -42,6 +42,7 @@ internal sealed class PanelForm : Form
     private bool configuring;
     internal WebView2 Browser { get; } = new() { Dock = DockStyle.Fill };
     internal Task Ready => loaded.Task;
+    private readonly CancellationTokenSource lifetime = new();
 
     public PanelForm(ModelService service, IPanelTarget target)
     {
@@ -101,8 +102,16 @@ internal sealed class PanelForm : Form
                 throw new InvalidOperationException("输入面板加载失败。请确认完整解压安装包。");
             if (closed) return;
             Browser.Focus();
+            string? catalogError = null;
+            if (service.ChatGpt.CanUsePlan)
+            {
+                try { await service.RefreshChatModelsAsync(lifetime.Token); }
+                catch (Exception error) when (!closed) { catalogError = error.Message; }
+            }
+            if (closed) return;
             await Call("start", new { models = service.Models, defaultModelID = service.DefaultModelID,
                 fontName = target.FontName, fontSize = target.FontSize });
+            if (catalogError != null) await Call("error", catalogError);
             loaded.TrySetResult(true);
         }
         catch (Exception ex) { StartupFailure(ex); }
@@ -146,13 +155,13 @@ internal sealed class PanelForm : Form
         }
     }
 
-    internal void OpenSettings()
+    internal void OpenSettings(bool showChatGpt = false)
     {
         if (configuring || closed || request != null) return;
         configuring = true;
         try
         {
-            using var dialog = new ModelSettingsForm(service);
+            using var dialog = new ModelSettingsForm(service, showChatGpt);
             dialog.ShowDialog(this);
         }
         finally { configuring = false; }
@@ -193,7 +202,13 @@ internal sealed class PanelForm : Form
                     break;
                 case "settings":
                     // WebView2 callbacks must return before entering a modal message loop.
-                    BeginInvoke((Action)OpenSettings);
+                    BeginInvoke((Action)(() => OpenSettings()));
+                    break;
+                case "chatGPTSettings":
+                    BeginInvoke((Action)(() => OpenSettings(true)));
+                    break;
+                case "chatGPTUsage":
+                    ModelSettingsForm.OpenChatUsage();
                     break;
                 case "discardRepair": failed = null; break;
                 case "example" when request == null:
@@ -276,6 +291,7 @@ internal sealed class PanelForm : Form
         if (disposing && !closed)
         {
             closed = true;
+            lifetime.Cancel();
             request?.Cancel();
             failed = null;
             loaded.TrySetCanceled();

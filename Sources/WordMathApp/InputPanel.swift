@@ -14,7 +14,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private let anchor: WordAnchor
     private let settings: ProviderSettings
     private let client: ProviderClient
-    private let openSettings: () -> Void
+    private let openSettings: (Bool) -> Void
     private let onClose: () -> Void
     private let page: URL
     private var placement: PanelPlacement = .caret(.zero)
@@ -24,10 +24,12 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private var closed = false
     private var ready = false
     private var exampleOnLoad = false
+    private var catalogTask: Task<Void, Never>?
+    private var planAccount: ProviderAccount?
     private var choices: [String: (ProviderAccount, String)] = [:]
 
     init(anchor: WordAnchor, settings: ProviderSettings, client: ProviderClient,
-         openSettings: @escaping () -> Void, onClose: @escaping () -> Void) throws {
+         openSettings: @escaping (Bool) -> Void, onClose: @escaping () -> Void) throws {
         self.anchor = anchor
         self.settings = settings
         self.client = client
@@ -103,26 +105,59 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         lastLayoutTopLeft = windowTopLeft
     }
 
-    private func modelConfig() -> ([[String: String]], String) {
+    private func modelConfig() -> ([[String: Any]], String) {
         choices.removeAll()
-        var list: [[String: String]] = []
+        var list: [[String: Any]] = []
         var preferred = ""
         let defaultChoice = settings.defaultModel
-        for account in settings.accounts {
+        for stored in settings.accounts {
+            var account = stored
+            if stored.kind == .chatGPT {
+                if defaultChoice?.accountID == stored.id { preferred = "unavailable:chatgpt" }
+                guard let current = planAccount, current.id == stored.id,
+                      ChatGPTSession.shared.isConnected, current.registrationID == ChatGPTSession.shared.registrationID else { continue }
+                account = current
+            }
             for model in account.availableModels {
                 let key = account.id.uuidString + "/" + model
                 choices[key] = (account, model)
-                list.append(["id": key, "label": model + " · " + account.name])
+                list.append(["id": key, "label": (account.modelLabels?[model] ?? model) + " · " + account.name,
+                             "usesChatGPTPlan": account.kind == .chatGPT])
                 if defaultChoice == ModelChoice(accountID: account.id, modelID: model) { preferred = key }
             }
         }
         return (list, preferred)
     }
 
-    func refreshModels() {
+    private func applyModels() {
         guard ready else { return }
         let (list, preferred) = modelConfig()
         js("WordMath.setModels(models, preferred)", ["models": list, "preferred": preferred])
+    }
+
+    func refreshModels() {
+        catalogTask?.cancel()
+        let registration = ChatGPTSession.shared.registrationID
+        if planAccount?.registrationID != registration { planAccount = nil }
+        applyModels()
+        guard ready, !closed, let registration, ChatGPTSession.shared.isConnected,
+              var account = settings.accounts.first(where: { $0.kind == .chatGPT && $0.registrationID == registration }) else { return }
+        catalogTask = Task {
+            do {
+                let catalog = try await client.chatGPTCatalog(registrationID: registration)
+                guard !Task.isCancelled, !closed, ChatGPTSession.shared.registrationID == registration else { return }
+                account.discoveredModels = catalog.map(\.slug)
+                account.modelLabels = Dictionary(uniqueKeysWithValues: catalog.map { ($0.slug, $0.name) })
+                planAccount = account
+                applyModels()
+                if catalog.isEmpty { error("当前 ChatGPT 账号没有返回可用模型。") }
+            } catch {
+                guard !Task.isCancelled, !closed else { return }
+                planAccount = nil
+                applyModels()
+                self.error("读取 ChatGPT 模型失败：\(error.localizedDescription)")
+            }
+        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -132,6 +167,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let config: [String: Any] = ["models": list, "defaultModelID": preferred,
                                      "fontName": anchor.fontName, "fontSize": anchor.fontSize]
         js("WordMath.start(config)", ["config": config])
+        if settings.accounts.contains(where: { $0.kind == .chatGPT }) { refreshModels() }
         if exampleOnLoad { showExample() }
     }
 
@@ -149,6 +185,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         guard !closed else { return }
         closed = true
         request?.cancel()
+        catalogTask?.cancel()
         web.configuration.userContentController.removeScriptMessageHandler(forName: "wordmath")
         window.orderOut(nil)
         onClose()
@@ -192,7 +229,9 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                     place(width: CGFloat(w.doubleValue), height: CGFloat(h.doubleValue))
                 }
             case "cancel": close()
-            case "settings": openSettings()
+            case "settings": openSettings(false)
+            case "chatGPTSettings": openSettings(true)
+            case "chatGPTUsage": NSWorkspace.shared.open(URL(string: "https://chatgpt.com/settings/usage")!)
             case "example": showExample()
             case "generate": try generate(body)
             case "repair": try repair()
@@ -225,7 +264,8 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private func repair() throws {
         guard request == nil else { return }
         guard let failure = failedReply,
-              let current = settings.accounts.first(where: { $0.id == failure.account.id }),
+              let (current, _) = choices[failure.account.id.uuidString + "/" + failure.modelID],
+              current.registrationID == failure.account.registrationID,
               current.baseURL == failure.account.baseURL, current.kind == failure.account.kind,
               current.availableModels.contains(failure.modelID) else {
             failedReply = nil

@@ -28,7 +28,7 @@ internal sealed class TrayContext : ApplicationContext
         icon.DoubleClick += (_, _) => OpenFromTray();
         hotKey = new WordHotKey(OpenPanel, ShowExisting, () =>
             Notify("快捷键已被占用。可从托盘菜单选择「在 Word 中输入…」。"));
-        if (!service.Models.Any())
+        if (!service.Models.Any() && !service.ChatGpt.IsConnected)
             OpenSettings();
     }
 

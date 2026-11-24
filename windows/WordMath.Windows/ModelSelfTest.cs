@@ -35,6 +35,8 @@ public sealed partial class ModelService
     // Runs with isolated DPAPI storage and a fake HTTP handler (including for official service hosts).
     public static async Task SelfTestAsync()
     {
+        await ChatGptSession.SelfTestAsync();
+        await TestChatGptProviderAsync();
         string directory = Directory.CreateTempSubdirectory("wordmath-model-test-").FullName;
         string path = Path.Combine(directory, "models-v1.dpapi");
         const string key = "wordmath-fictional-test-secret";
@@ -100,6 +102,54 @@ public sealed partial class ModelService
             Require(service.DefaultModelID == claude.ChoiceId("test-model"), "移除账号后默认模型未更新");
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    private static async Task TestChatGptProviderAsync()
+    {
+        const string mockToken = "test-only-chat-plan";
+        var handler = new ModelTestHandler();
+        using var http = new HttpClient(handler);
+        handler.Respond = request =>
+        {
+            Require(request.Method == HttpMethod.Get && request.RequestUri!.AbsoluteUri == "https://api.openai.com/v1/models" &&
+                request.Headers.Authorization?.Scheme == "Bearer" && request.Headers.Authorization.Parameter == mockToken,
+                "ChatGPT 模型目录的账号或地址错误");
+            return Task.FromResult(Ok("""{"models":[{"slug":"z","display_name":"第一项","visibility":"list"},{"slug":"hidden","visibility":"hide"},{"slug":"a","display_name":"第二项","visibility":"list"}]}"""));
+        };
+        var catalog = await ChatGptProvider.CatalogAsync(http, mockToken, CancellationToken.None);
+        Require(catalog.Select(m => m.Slug).SequenceEqual(new[] { "z", "a" }) && catalog[0].Name == "第一项",
+            "ChatGPT 模型显示顺序、ID 或可见性错误");
+        string delta = """{"type":"response.output_text.delta","delta":"部分文本"}""";
+        string complete = """{"type":"response.completed","response":{"status":"completed","model":"z","output":[{"type":"message","content":[{"type":"output_text","text":"完整回答"}]}],"usage":{"input_tokens":3,"output_tokens":9}}}""";
+        string limit = """{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"sensitive-reply"}}}""";
+        static HttpResponseMessage Stream(string s) => new(HttpStatusCode.OK) { Content = new StringContent(s, Encoding.UTF8, "text/event-stream") };
+        handler.Respond = async request =>
+        {
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!.AsObject();
+            Require(request.RequestUri!.AbsoluteUri == "https://api.openai.com/v1/responses" && request.Method == HttpMethod.Post &&
+                request.Headers.Authorization?.Parameter == mockToken && (bool)body["stream"]! && !(bool)body["store"]! &&
+                (string?)body["model"] == "z" && (string?)body["instructions"] == "系统" &&
+                (string?)body["input"]?[0]?["content"] == "矩阵" && body.Count == 5, "ChatGPT 套餐的推理请求不符合协议");
+            return Stream(": keepalive\r\n\r\ndata: " + delta + "\n\nevent: response.completed\r\ndata: " + complete + "\r\n\r\n");
+        };
+        var reply = await ChatGptProvider.GenerateAsync(http, mockToken, catalog[0].Slug, "系统", "矩阵", CancellationToken.None);
+        Require(reply.Text == "完整回答" && reply.Receipt.Contains("9 tokens") && reply.Receipt.Contains("ChatGPT"), "ChatGPT 完成事件或回执错误");
+        async Task CheckFailure(string data, string expected)
+        {
+            handler.Respond = _ => Task.FromResult(Stream("data: " + delta + "\n\n" + data));
+            try { await ChatGptProvider.GenerateAsync(http, mockToken, "z", "s", "p", CancellationToken.None); }
+            catch (Exception error) when (error.Message.Contains(expected) && !error.Message.Contains("sensitive-reply")) { return; }
+            throw new InvalidOperationException("ChatGPT 流的终态未被正确处理：" + expected);
+        }
+        await CheckFailure("data: " + limit + "\n\n", "用量");
+        await CheckFailure("data: [DONE]\n\n", "中断");
+        await CheckFailure("data: {\"type\":\"response.incomplete\"}\n\n", "未完成");
+        await CheckFailure("", "中断");
+        handler.Respond = _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden) {
+            Content = new StringContent("""{"detail":"sensitive-reply"}""") });
+        try { await ChatGptProvider.CatalogAsync(http, mockToken, CancellationToken.None); }
+        catch (InvalidOperationException error) when (error.Message.Contains("403") && !error.Message.Contains("sensitive-reply")) { return; }
+        throw new InvalidOperationException("ChatGPT 访问权限错误未正确处理");
     }
 
     private sealed class ModelTestHandler : HttpMessageHandler

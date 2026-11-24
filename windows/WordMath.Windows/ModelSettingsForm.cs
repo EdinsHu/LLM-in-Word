@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,13 +32,22 @@ public sealed class ModelSettingsForm : Form
     private readonly Button delete = new() { Text = "移除此服务", AutoSize = true };
     private readonly Button save = new() { Text = "保存设置", AutoSize = true };
     private readonly CancellationTokenSource lifetime = new();
+    private readonly Label accountStatus = new() { AutoSize = true, MaximumSize = new Size(510, 0) };
+    private readonly Label chatFeedback = new() { AutoSize = true, MaximumSize = new Size(510, 0) };
+    private readonly ComboBox chatModels = DropDown();
+    private readonly Button chatLogin = new() { Name = "chatGPTLogin", AutoSize = true };
+    private readonly Button differentAccount = new() { Text = "使用其他账号", AutoSize = true };
+    private readonly Button chatRefresh = new() { Text = "刷新模型", AutoSize = true };
+    private readonly Button chatSignOut = new() { Text = "退出 ChatGPT", AutoSize = true };
+    private readonly Button chatDefault = new() { Text = "设为默认模型", AutoSize = true };
+    private bool chatBusy;
     private Guid activeID;
     private bool filling;
     private long revision;
     private const string KeepDefault = "沿用当前默认模型";
     private static ComboBox DropDown() => new() { DropDownStyle = ComboBoxStyle.DropDownList };
 
-    public ModelSettingsForm(ModelService service)
+    public ModelSettingsForm(ModelService service, bool showChatGpt = false)
     {
         this.service = service;
         Text = "WordMath · 模型设置";
@@ -54,7 +64,59 @@ public sealed class ModelSettingsForm : Form
         body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
         scroll.Controls.Add(body);
-        Controls.Add(scroll);
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var chatTab = new TabPage("ChatGPT 账号") { AutoScroll = true };
+        var apiTab = new TabPage("API 服务");
+        apiTab.Controls.Add(scroll);
+        tabs.TabPages.Add(chatTab);
+        tabs.TabPages.Add(apiTab);
+        tabs.SelectedTab = showChatGpt || service.ChatGpt.IsConnected || service.Accounts.Count == 0 ? chatTab : apiTab;
+        Controls.Add(tabs);
+
+        var chat = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false,
+            AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(15) };
+        chatTab.Controls.Add(chat);
+        chat.Controls.Add(accountStatus);
+        var signInRow = new FlowLayoutPanel { AutoSize = true };
+        signInRow.Controls.AddRange([chatLogin, differentAccount, chatSignOut]);
+        chat.Controls.Add(signInRow);
+        chatModels.Width = 320;
+        chat.Controls.Add(chatModels);
+        var chatActions = new FlowLayoutPanel { AutoSize = true };
+        var usage = new LinkLabel { Text = "管理 ChatGPT 用量", AutoSize = true, Anchor = AnchorStyles.Left };
+        chatActions.Controls.AddRange([chatRefresh, chatDefault, usage]);
+        chat.Controls.Add(chatActions);
+        chat.Controls.Add(chatFeedback);
+
+        chatLogin.Click += async (_, _) => await ChatAction(async () =>
+        {
+            await service.ChatGpt.SignInAsync(lifetime.Token);
+            await service.RefreshChatModelsAsync(lifetime.Token);
+        });
+        differentAccount.Click += async (_, _) => await ChatAction(async () =>
+        {
+            await service.ChatGpt.SignInAsync(lifetime.Token, useDifferentAccount: true);
+            await service.RefreshChatModelsAsync(lifetime.Token);
+        });
+        chatRefresh.Click += async (_, _) => await ChatAction(() => service.RefreshChatModelsAsync(lifetime.Token, resumeUsage: true));
+        chatSignOut.Click += async (_, _) => await ChatAction(() => service.DisconnectChatAsync(lifetime.Token));
+        chatDefault.Click += (_, _) =>
+        {
+            if (chatModels.SelectedItem is not ChatGptModel model) return;
+            try { service.SelectChatDefault(model); chatFeedback.Text = "默认模型已保存。"; }
+            catch (Exception error) { chatFeedback.Text = error.Message; }
+        };
+        usage.LinkClicked += (_, _) => { try { OpenChatUsage(); } catch { chatFeedback.Text = ChatGptProvider.UsageUrl; } };
+        bool catalogRequested = false;
+        async Task RefreshVisibleTab()
+        {
+            if (tabs.SelectedTab != chatTab || catalogRequested || !service.ChatGpt.CanUsePlan) return;
+            catalogRequested = true;
+            await ChatAction(() => service.RefreshChatModelsAsync(lifetime.Token));
+        }
+        tabs.SelectedIndexChanged += async (_, _) => await RefreshVisibleTab();
+        Shown += async (_, _) => await RefreshVisibleTab();
+        UpdateChatAccount();
         void Field(string label, Control control)
         {
             int n = body.RowCount++;
@@ -90,7 +152,11 @@ public sealed class ModelSettingsForm : Form
         Field("", feedback);
         var buttons = new FlowLayoutPanel { AutoSize = true };
         var close = new Button { Text = "关闭", AutoSize = true, DialogResult = DialogResult.Cancel };
-        buttons.Controls.AddRange([save, delete, close]);
+        buttons.Controls.AddRange([save, delete]);
+        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8, 3, 8, 3) };
+        bottom.Controls.Add(close);
+        Controls.Add(bottom);
         Field("", buttons);
         CancelButton = close;
         close.Click += (_, _) => Close();
@@ -109,6 +175,57 @@ public sealed class ModelSettingsForm : Form
         save.Click += (_, _) => TrySettings(SaveAccount);
         delete.Click += (_, _) => TrySettings(RemoveAccount);
         RefreshAccounts(service.Accounts.FirstOrDefault()?.Id);
+    }
+
+    internal static void OpenChatUsage()
+    {
+        using var browser = Process.Start(new ProcessStartInfo(ChatGptProvider.UsageUrl) { UseShellExecute = true });
+    }
+
+    private void UpdateChatAccount()
+    {
+        var session = service.ChatGpt;
+        accountStatus.Text = session.IsConnected
+            ? $"已登录 ChatGPT{(session.AccountLabel == null ? "" : " · " + session.AccountLabel)}。"
+                + (session.CanUsePlan ? "生成和追问使用此账号的 ChatGPT 套餐。" : "此账号尚未授权 WordMath 使用 ChatGPT 套餐。")
+            : "使用 ChatGPT 登录后，符合条件的账号可使用自己的 ChatGPT 套餐生成和修改公式。";
+        chatLogin.Text = session.IsConnected ? "授权使用 ChatGPT 套餐" : "使用 ChatGPT 登录";
+        chatLogin.Visible = !session.CanUsePlan;
+        chatLogin.Enabled = !chatBusy;
+        differentAccount.Visible = !session.IsConnected && session.HasRegistration;
+        differentAccount.Enabled = !chatBusy;
+        chatSignOut.Visible = session.IsConnected;
+        chatSignOut.Enabled = !chatBusy;
+        chatRefresh.Visible = chatDefault.Visible = chatModels.Visible = session.CanUsePlan;
+        chatModels.Items.Clear();
+        foreach (var model in service.ChatModels) chatModels.Items.Add(model);
+        if (chatModels.Items.Count > 0)
+            chatModels.SelectedItem = service.ChatModels.FirstOrDefault(m => service.ChatChoiceID(m.Slug) == service.DefaultModelID) ?? service.ChatModels[0];
+        chatRefresh.Enabled = !chatBusy;
+        chatDefault.Enabled = chatModels.Enabled = !chatBusy && chatModels.Items.Count != 0;
+    }
+
+    private async Task ChatAction(Func<Task> operation)
+    {
+        if (chatBusy) return;
+        chatBusy = true;
+        chatFeedback.Text = "正在连接 ChatGPT…";
+        UpdateChatAccount();
+        try
+        {
+            await operation();
+            if (!lifetime.IsCancellationRequested)
+                chatFeedback.Text = service.ChatGpt.CanUsePlan && service.ChatModels.Count == 0 ? "此账号当前没有可选模型。" : "";
+        }
+        catch (Exception error)
+        {
+            if (!lifetime.IsCancellationRequested) chatFeedback.Text = error.Message;
+        }
+        finally
+        {
+            chatBusy = false;
+            if (!lifetime.IsCancellationRequested) UpdateChatAccount();
+        }
     }
 
     private void RefreshAccounts(Guid? requested)

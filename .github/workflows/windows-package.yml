@@ -3,10 +3,13 @@ on:
   push:
     branches: [main, windows-port]
     paths:
+      - 'Package.swift'
+      - 'Packaging/**'
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'scripts/**'
       - 'windows/**'
-      - 'Sources/WordMathApp/Resources/Panel/**'
-      - 'Sources/WordMathCore/Content.swift'
-      - '.github/workflows/windows-package.yml'
+      - '.github/workflows/*-package.yml'
   pull_request:
     paths:
       - 'windows/**'

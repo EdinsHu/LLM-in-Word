@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showSettings(returningTo: nil)
     }
 
-    private func showSettings(returningTo panel: InputPanel?) {
+    private func showSettings(returningTo panel: InputPanel?, chatGPT: Bool = false) {
         let window = preferences ?? SettingsWindow(settings: settings, client: client) { [weak self] in
             self?.input?.refreshModels()
         }
@@ -124,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 panel.focus()
             }
         }
-        window.show()
+        window.show(chatGPT: chatGPT)
     }
 
     @objc private func requestCaretAccess() {
@@ -160,9 +160,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let anchor = try WordIntegration.capture()
             let panel = try InputPanel(
                 anchor: anchor, settings: settings, client: client,
-                openSettings: { [weak self] in
+                openSettings: { [weak self] chatGPT in
                     guard let self else { return }
-                    self.showSettings(returningTo: self.input)
+                    self.showSettings(returningTo: self.input, chatGPT: chatGPT)
                 },
                 onClose: { [weak self] in
                     self?.input = nil

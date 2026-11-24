@@ -55,6 +55,7 @@ private final class PreventRedirect: NSObject, URLSessionTaskDelegate {
 public final class ProviderClient {
     private let session: URLSession
     private let credentials: CredentialStorage
+    private let planToken: (String) async throws -> String
 
     public convenience init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -66,12 +67,15 @@ public final class ProviderClient {
                   credentials: KeychainCredentials())
     }
 
-    init(session: URLSession, credentials: CredentialStorage) {
+    init(session: URLSession, credentials: CredentialStorage,
+         planToken: @escaping (String) async throws -> String = { try await ChatGPTSession.shared.accessToken(for: $0) }) {
+        self.planToken = planToken
         self.session = session
         self.credentials = credentials
     }
 
     private func request(for account: ProviderAccount, path: String, apiKey: String? = nil) throws -> URLRequest {
+        guard account.kind != .chatGPT else { throw ProviderError.invalidEndpoint }
         let url = try account.validatedURL().appendingPathComponent(path)
         let token = try (apiKey ?? credentials.token(for: account))?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard token?.contains(where: { $0.isNewline }) != true else { throw ProviderError.invalidKey }
@@ -103,8 +107,16 @@ public final class ProviderClient {
         return (object, http.statusCode)
     }
 
+    public func chatGPTCatalog(registrationID: String) async throws -> [(slug: String, name: String)] {
+        try await ChatGPTProvider(session: session).models(token: planToken(registrationID))
+    }
+
     /// Query this account. Saved manual IDs remain available when a server has no listing endpoint.
     public func models(account: ProviderAccount, apiKey: String? = nil) async throws -> [String] {
+        if account.kind == .chatGPT {
+            guard let id = account.registrationID, apiKey == nil else { throw ProviderError.invalidModel }
+            return try await chatGPTCatalog(registrationID: id).map(\.slug)
+        }
         let initial = try request(for: account, path: "models", apiKey: apiKey)
         var page = initial
         var seenCursors = Set<String>()
@@ -196,11 +208,48 @@ public final class ProviderClient {
         \(MathDocument.schemaGuide)
         """
         let userContent = String(decoding: try JSONEncoder().encode(context), as: UTF8.self)
+        let answer: String
+        if account.kind == .chatGPT {
+            guard let registration = account.registrationID, account.availableModels.contains(modelID) else {
+                throw ProviderError.invalidModel
+            }
+            let token = try await planToken(registration)
+            let response = try await ChatGPTProvider(session: session).generate(model: modelID, token: token,
+                                                                                instructions: system, input: userContent)
+            answer = response.0
+            onReceipt?(response.1)
+        } else {
+            answer = try await apiAnswer(account: account, modelID: modelID, system: system,
+                                         userContent: userContent, onReceipt: onReceipt)
+        }
+        try Task.checkCancellation()
+        let document: MathDocument
+        do {
+            document = try ModelReply.parse(answer)
+        } catch let error as ModelReplyError {
+            guard error != .tooLarge && error != .tooComplex && answer.utf8.count <= 512 * 1024 else { throw error }
+            throw ModelFormattingError(account: account, modelID: modelID, input: input,
+                                       answer: answer, reason: error.localizedDescription, scope: scope)
+        }
+        if let scope {
+            do { return try scope.merging(document) }
+            catch {
+                // Keep the original slots and approved blocks even if the model rewrites the entire document.
+                throw ModelFormattingError(account: account, modelID: modelID, input: input,
+                                           answer: try document.json(), reason: error.localizedDescription, scope: scope)
+            }
+        }
+        return document
+    }
+
+    private func apiAnswer(account: ProviderAccount, modelID: String, system: String, userContent: String,
+                           onReceipt: ((ProviderReceipt) -> Void)?) async throws -> String {
         let userMessage = ["role": "user", "content": userContent]
 
         var body: [String: Any] = ["model": modelID]
         let path: String
         switch account.kind {
+        case .chatGPT: throw ProviderError.invalidEndpoint
         case .openAICompatible:
             path = "chat/completions"
             // The official DeepSeek endpoint supports JSON Output. Custom compatible endpoints
@@ -228,6 +277,7 @@ public final class ProviderClient {
         let answer: String
         let content: Any?
         switch account.kind {
+        case .chatGPT: throw ProviderError.invalidEndpoint
         case .openAICompatible:
             guard let first = (result["choices"] as? [[String: Any]])?.first else { throw ProviderError.invalidResponse }
             switch first["finish_reason"] as? String {
@@ -268,22 +318,6 @@ public final class ProviderClient {
         } else if content == nil || content is NSNull { throw ProviderError.emptyResponse }
         else { throw ProviderError.invalidResponse }
         guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProviderError.emptyResponse }
-        let document: MathDocument
-        do {
-            document = try ModelReply.parse(answer)
-        } catch let error as ModelReplyError {
-            guard error != .tooLarge && error != .tooComplex && answer.utf8.count <= 512 * 1024 else { throw error }
-            throw ModelFormattingError(account: account, modelID: modelID, input: input,
-                                       answer: answer, reason: error.localizedDescription, scope: scope)
-        }
-        if let scope {
-            do { return try scope.merging(document) }
-            catch {
-                // Keep the original slots and approved blocks even if the model rewrites the entire document.
-                throw ModelFormattingError(account: account, modelID: modelID, input: input,
-                                           answer: try document.json(), reason: error.localizedDescription, scope: scope)
-            }
-        }
-        return document
+        return answer
     }
 }

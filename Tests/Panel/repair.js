@@ -91,5 +91,27 @@
   $('repair').click();
   assert(calls('repair').length === 2, 'Changing model during a request must not enable a repair on the previous account.');
   assert(!calls('insert').length, 'Repair must never insert the preview into Word.');
+  const beforeLogin = calls('generate').length;
+  WordMath.start();
+  const picker = $('model');
+  assert(!picker.hidden && picker.options.length === 2, 'Account login must be reachable before any model is configured.');
+  picker.value = picker.options[picker.options.length - 1].value;
+  picker.dispatchEvent(new Event('change'));
+  assert(calls('chatGPTSettings').length === 1 && picker.value === '' &&
+    calls('generate').length === beforeLogin, 'Opening sign-in must not send a model request.');
+  const plan = { id: 'plan1', label: 'From account', usesChatGPTPlan: true };
+  const api = { id: 'api1', label: 'From API' };
+  WordMath.setModels([plan, api], 'plan1');
+  assert(picker.value === 'plan1' && !$('planUsage').hidden, 'Plan selection must show where usage is charged.');
+  $('manageUsage').click();
+  assert(calls('chatGPTUsage').length === 1, 'The plan usage link must reach the native host.');
+  WordMath.setModels([api], 'unavailable:plan1');
+  generate('保留原来的计费用途');
+  assert(!picker.value && calls('generate').length === beforeLogin,
+    'An unavailable plan must not send the prompt using a different account.');
+  picker.value = 'api1';
+  picker.dispatchEvent(new Event('change'));
+  generate('显式选择 API');
+  assert($('planUsage').hidden && calls('generate').at(-1).modelID === 'api1', 'An explicit account change should work.');
   return 'PASS';
 })();

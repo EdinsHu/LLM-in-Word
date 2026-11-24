@@ -4,8 +4,8 @@ Windows 版面向 x64 Windows 11 和桌面版 Microsoft Word。它在系统托�
 
 ## 安装与首次使用
 
-1. 从项目的 [Windows 候选发行版](https://github.com/EdinsHu/LLM-in-Word/releases/tag/v0.2.0-rc.1) 下载带有 `windows-x64-setup.exe` 后缀的附件。安装程序包含应用所需的 .NET 运行时，默认安装到当前用户的应用目录。预览使用 Microsoft Edge WebView2 Runtime。
-2. 打开 WordMath，在「模型设置」里选择或添加服务，配置自己的 API 密钥、模型和默认选项。密钥和设置使用当前 Windows 用户的 DPAPI 加密保存。也可先关闭设置，使用离线排版示例检查预览和插入。
+1. 从项目的 [Windows 候选发行版](https://github.com/EdinsHu/LLM-in-Word/releases/tag/v0.2.0-rc.2) 下载带有 `windows-x64-setup.exe` 后缀的附件。安装程序包含应用所需的 .NET 运行时，默认安装到当前用户的应用目录。预览使用 Microsoft Edge WebView2 Runtime。
+2. 打开 WordMath，在模型下拉框选择「使用 ChatGPT 登录…」，点击登录按钮后，在浏览器中授权。回到 WordMath 即可选择该账号可用的模型。也可以在「模型设置」中添加 DeepSeek 等 API 服务，或先用离线示例体验预览。WordMath 使用当前 Windows 用户的 DPAPI 加密保存授权凭据。
 3. 打开可编辑的 Word 文档，单击正文中的插入位置，再按快捷键。可输入「给出哈密顿–凯莱定理的证明，解释文字沿用正文格式」。点选预览中的符号或文字可直接修改，也可继续追问。确认后点击「插入 Word」。
 4. 在应用托盘菜单中可打开设置或退出。在 Windows「已安装的应用」中可卸载。
 

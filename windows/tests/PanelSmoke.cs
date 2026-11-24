@@ -54,7 +54,7 @@ internal static class PanelSmoke
             Application.Run(loop);
             if (failure != null)
                 throw new InvalidOperationException("Windows panel self-test failed", failure);
-            Console.WriteLine("PASS: WebView2 preview/edit/insert, model generation, block repair and selected follow-up.");
+            Console.WriteLine("PASS: WebView2 ChatGPT sign-in picker and settings, preview/edit/insert, model generation, block repair and selected follow-up.");
             return 0;
         }
         finally
@@ -85,26 +85,17 @@ internal static class PanelSmoke
         if (Application.OpenForms.OfType<ModelSettingsForm>().Any())
             throw new InvalidOperationException("Generating an offline preview opened Settings unexpectedly.");
         await panel.Browser.ExecuteScriptAsync("setTimeout(() => document.getElementById('settings').click(), 50)");
-        var clock = Stopwatch.StartNew();
-        ModelSettingsForm? settings;
-        while ((settings = Application.OpenForms.OfType<ModelSettingsForm>().SingleOrDefault()) == null ||
-            !settings.IsHandleCreated || !settings.Visible || settings.CancelButton is not Button { CanSelect: true })
-        {
-            if (clock.Elapsed >= TimeSpan.FromSeconds(12))
-                throw new TimeoutException("Opening model settings from the input panel.");
-            await Task.Delay(75);
-        }
-        settings.CancelButton!.PerformClick();
-        // ShowDialog has its own nested message loop. Yielding directly can resume
-        // before it unwinds; wait for actual visibility and owner interactivity.
-        clock.Restart();
-        while ((!settings.IsDisposed && settings.Visible) || !IsWindowEnabled(panel.Handle))
-        {
-            if (clock.Elapsed >= TimeSpan.FromSeconds(8))
-                throw new InvalidOperationException("Closing Settings left a visible dialog or disabled the input panel.");
-            await Task.Delay(75);
-        }
-        await WaitForPageAsync(panel, "!document.getElementById('previewArea').hidden", "preserved draft after closing Settings");
+        await CloseSettingsAsync(panel, checkChatLogin: false);
+        await WaitForPageAsync(panel, "Array.from(document.getElementById('model').options).some(o => o.text === '使用 ChatGPT 登录…')",
+            "ChatGPT sign-in entry in the model picker");
+        await panel.Browser.ExecuteScriptAsync("""
+            setTimeout(() => {
+                const model = document.getElementById('model');
+                model.value = Array.from(model.options).find(o => o.text === '使用 ChatGPT 登录…').value;
+                model.dispatchEvent(new Event('change', { bubbles: true }));
+            }, 50)
+            """);
+        await CloseSettingsAsync(panel, checkChatLogin: true);
 
         const string editedText = "局部修改 <A&B> 保留文字";
         string value = JsonSerializer.Serialize(editedText);
@@ -142,6 +133,38 @@ internal static class PanelSmoke
         XElement root = XElement.Parse($"<root xmlns:w='{word}' xmlns:m='{math}'>{body}</root>");
         if (!root.Descendants(word + "t").Any(t => t.Value == editedText) || !root.Descendants(math + "oMath").Any())
             throw new InvalidOperationException("Inserted XML lost the edited paragraph text or editable math.");
+    }
+
+    private static async Task CloseSettingsAsync(PanelForm panel, bool checkChatLogin)
+    {
+        var clock = Stopwatch.StartNew();
+        ModelSettingsForm? settings;
+        while ((settings = Application.OpenForms.OfType<ModelSettingsForm>().SingleOrDefault()) == null ||
+            !settings.IsHandleCreated || !settings.Visible || settings.CancelButton is not Button { CanSelect: true })
+        {
+            if (clock.Elapsed >= TimeSpan.FromSeconds(12))
+                throw new TimeoutException("Opening model settings from the input panel.");
+            await Task.Delay(75);
+        }
+        if (checkChatLogin)
+        {
+            var tabs = settings.Controls.OfType<TabControl>().Single();
+            var login = settings.Controls.Find("chatGPTLogin", true).OfType<Button>().Single();
+            if (tabs.SelectedTab?.Text != "ChatGPT 账号" || login.Text != "使用 ChatGPT 登录" ||
+                !login.Visible || !login.Enabled)
+                throw new InvalidOperationException("The model picker did not expose an actionable ChatGPT sign-in.");
+        }
+        settings.CancelButton!.PerformClick();
+        // ShowDialog has its own nested message loop. Yielding directly can resume
+        // before it unwinds; wait for actual visibility and owner interactivity.
+        clock.Restart();
+        while ((!settings.IsDisposed && settings.Visible) || !IsWindowEnabled(panel.Handle))
+        {
+            if (clock.Elapsed >= TimeSpan.FromSeconds(8))
+                throw new InvalidOperationException("Closing Settings left a visible dialog or disabled the input panel.");
+            await Task.Delay(75);
+        }
+        await WaitForPageAsync(panel, "!document.getElementById('previewArea').hidden", "preserved draft after closing Settings");
     }
 
     private static async Task ExerciseConversationAsync(string directory)

@@ -17,6 +17,9 @@
     : message => window.webkit.messageHandlers.wordmath.postMessage(message);
   const insertModifier = event => windowsHost ? event.ctrlKey : event.metaKey;
   if (windowsHost) byID('insert').querySelector('kbd').textContent = 'Ctrl+↵';
+  const accountSettingsOption = '__wordmath_chatgpt_settings__';
+  let selectedModel = '';
+  let modelCount = 0;
   let lastHeight = 0;
   let composing = false;
   let compositionEndedAt = -Infinity;
@@ -45,15 +48,15 @@
 
   function controls() {
     const hasDraft = !!state.draft;
-    const hasModels = model.options.length > 0;
+    const hasModels = modelCount > 0;
     byID('setupHint').hidden = hasModels || hasDraft;
     byID('example').disabled = state.busy;
     if (windowsHost) byID('settings').disabled = state.busy;
     byID('previewHint').textContent = state.isExample ? '离线排版示例 · 点选文字或符号可编辑' : '点选文字或符号可编辑';
-    model.hidden = !hasModels;
+    byID('planUsage').hidden = model.selectedOptions[0]?.dataset.plan !== 'true';
     byID('modeBar').hidden = byID('previewArea').hidden = !hasDraft;
     byID('generate').textContent = hasModels ? (hasDraft ? '更新预览' : '生成') : '配置服务';
-    byID('generate').disabled = state.busy || (hasModels && !prompt.value.trim());
+    byID('generate').disabled = state.busy || (hasModels && (!selectedModel || !prompt.value.trim()));
     byID('insert').disabled = !hasDraft || state.busy;
     model.disabled = prompt.disabled = state.busy;
     byID('revisionMode').disabled = byID('replaceMode').disabled = state.busy;
@@ -70,18 +73,29 @@
   }
 
   function setModels(models, preferredID) {
-    const previous = model.value;
+    const previous = selectedModel;
+    const wasPlan = model.selectedOptions[0]?.dataset.plan === 'true';
+    const entries = models || [];
     model.replaceChildren();
-    for (const entry of models || []) {
-      const option = document.createElement('option');
-      option.value = entry.id;
-      option.textContent = entry.label;
+    for (const entry of entries) {
+      const option = new Option(entry.label, entry.id);
+      option.dataset.plan = String(entry.usesChatGPTPlan === true);
       model.append(option);
     }
-    const ids = Array.from(model.options, entry => entry.value);
-    const selected = [previous, preferredID, ids[0]].find(value => ids.includes(value));
-    if (selected !== undefined) model.value = selected;
-    if (model.value !== previous) discardRepair();
+    modelCount = entries.length;
+    const ids = entries.map(entry => entry.id);
+    const unavailable = preferredID?.startsWith('unavailable:') || (wasPlan && !ids.includes(previous));
+    selectedModel = ids.includes(previous) ? previous
+      : unavailable ? '' : (ids.includes(preferredID) ? preferredID : ids[0] || '');
+    if (!selectedModel) {
+      const placeholder = new Option(unavailable ? '请重新选择模型' : '选择模型', '');
+      placeholder.disabled = true;
+      model.prepend(placeholder);
+    }
+    const accountLabel = entries.some(entry => entry.usesChatGPTPlan) ? '管理 ChatGPT 账号…' : '使用 ChatGPT 登录…';
+    model.append(new Option(accountLabel, accountSettingsOption));
+    model.value = selectedModel;
+    if (selectedModel !== previous) discardRepair();
     controls();
   }
 
@@ -95,6 +109,7 @@
   function start(config = {}) {
     Object.assign(state, { draft: null, originalPrompt: '', mode: 'revision',
       activeNode: null, scopePath: null, pending: null, busy: false, isExample: false });
+    selectedModel = '';
     model.replaceChildren();
     preview.replaceChildren();
     preview.style.removeProperty('--word-font-family');
@@ -306,7 +321,8 @@
 
   function generate() {
     if (state.busy) return;
-    if (!model.options.length) { post({ action: 'settings' }); return; }
+    if (!modelCount) { post({ action: 'settings' }); return; }
+    if (!selectedModel || selectedModel !== model.value) { model.focus(); return; }
     const input = prompt.value.trim();
     if (!input || !applyEdit()) return;
     const isRevision = !!state.draft && state.mode === 'revision';
@@ -351,7 +367,17 @@
   for (const input of [prompt, editValue]) {
     input.addEventListener('input', () => { discardRepair(); controls(); });
   }
-  model.addEventListener('change', () => { discardRepair(); controls(); });
+  model.addEventListener('change', () => {
+    if (model.value === accountSettingsOption) {
+      model.value = selectedModel;
+      post({ action: 'chatGPTSettings' });
+      return;
+    }
+    selectedModel = model.value;
+    discardRepair();
+    controls();
+  });
+  byID('manageUsage').addEventListener('click', () => post({ action: 'chatGPTUsage' }));
   byID('repair').addEventListener('click', repair);
   byID('settings').addEventListener('click', () => post({ action: 'settings' }));
   byID('example').addEventListener('click', () => {

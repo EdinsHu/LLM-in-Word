@@ -30,17 +30,20 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        form.stopLookup()
         let completion = onClose
         onClose = nil
         completion?()
     }
 
     func hideForInput() {
+        form.stopLookup()
         onClose = nil
         window.orderOut(nil)
     }
 
-    func show() {
+    func show(chatGPT: Bool = false) {
+        if chatGPT || (!window.isVisible && form.draft.kind == .chatGPT) { form.editChatGPT() }
         NSApp.activate(ignoringOtherApps: true)
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
@@ -86,12 +89,15 @@ private final class AccountForm: ObservableObject {
         self.onChange = onChange
         let savedAccounts = settings.accounts
         accounts = savedAccounts
-        draft = savedAccounts.first ?? AccountPreset.openAI.account
+        draft = savedAccounts.first ?? ProviderAccount.chatGPT(registrationID: "")
         load(draft)
     }
 
     var saved: Bool { accounts.contains { $0.id == draft.id } }
-    var available: [String] { currentAccount.availableModels }
+    var available: [String] {
+        if draft.kind == .chatGPT, !connected || draft.registrationID != ChatGPTSession.shared.registrationID { return [] }
+        return currentAccount.availableModels
+    }
 
     private var currentAccount: ProviderAccount {
         var account = draft
@@ -185,7 +191,92 @@ private final class AccountForm: ObservableObject {
         }
     }
 
-    private func stopLookup() {
+    var connected: Bool { ChatGPTSession.shared.isConnected }
+    var accountLabel: String? { ChatGPTSession.shared.accountLabel }
+
+    func editChatGPT() {
+        let previous = settings.accounts.first { $0.kind == .chatGPT }
+        load(previous ?? ProviderAccount.chatGPT(registrationID: ChatGPTSession.shared.registrationID ?? ""))
+        draft.discoveredModels = []
+        draft.modelLabels = nil
+        if connected { refreshChatGPT() }
+    }
+
+    var registrations: [String: String] { ChatGPTSession.shared.savedRegistrations }
+
+    func refreshChatGPT(login: Bool = false, registerNew: Bool = false, savedID: String? = nil) {
+        stopLookup()
+        isLoading = true
+        note(login ? "请在浏览器中完成 OpenAI 授权。" : "正在读取账号可用的模型…")
+        lookup = Task {
+            do {
+                let session = ChatGPTSession.shared
+                if login {
+                    let id = registerNew ? nil : (savedID ?? session.registrationID)
+                    try await session.signIn(registrationID: id) { url in NSWorkspace.shared.open(url) }
+                }
+                try Task.checkCancellation()
+                guard let registration = session.registrationID, session.isConnected else {
+                    note("账号尚未授权共享套餐用量。请使用 ChatGPT 登录并确认授权。", error: true)
+                    isLoading = false
+                    return
+                }
+                // Persist the registration before fetching its catalog so a transient API outage
+                // doesn't require the user to repeat a completed browser sign-in.
+                let old = settings.accounts.first { $0.kind == .chatGPT }
+                var current = ProviderAccount.chatGPT(registrationID: registration, replacing: old)
+                if old?.registrationID != registration {
+                    try settings.save(account: current)
+                    draft = current
+                    accounts = settings.accounts
+                    onChange()
+                }
+                let catalog = try await client.chatGPTCatalog(registrationID: registration)
+                try Task.checkCancellation()
+                guard session.registrationID == registration else { throw ProviderError.invalidModel }
+                current.discoveredModels = catalog.map(\.slug)
+                current.modelLabels = Dictionary(uniqueKeysWithValues: catalog.map { ($0.slug, $0.name) })
+                try settings.save(account: current)
+                accounts = settings.accounts
+                draft = current
+                let selected = settings.defaultModel
+                defaultID = selected?.accountID == current.id ? selected?.modelID ?? "" : ""
+                onChange()
+                note(catalog.isEmpty ? "此账号没有返回可选模型。" :
+                     "已读取 \(catalog.count) 个模型。生成、追问和修复将使用所选账号的 ChatGPT 套餐用量。")
+            } catch {
+                guard !Task.isCancelled else { return }
+                note(error.localizedDescription, error: true)
+            }
+            isLoading = false
+        }
+    }
+
+    func disconnectChatGPT() {
+        stopLookup()
+        isLoading = true
+        lookup = Task {
+            let session = ChatGPTSession.shared
+            var failure: Error?
+            do { try await session.signOut() } catch { failure = error }
+            guard !Task.isCancelled else { return }
+            if !session.isConnected {
+                do {
+                    if let saved = settings.accounts.first(where: { $0.kind == .chatGPT }) {
+                        try settings.remove(id: saved.id)
+                    }
+                    accounts = settings.accounts
+                    load(ProviderAccount.chatGPT(registrationID: ""))
+                } catch { failure = error }
+            }
+            onChange()
+            if let failure { note(failure.localizedDescription, error: true) }
+            else { note("已断开连接。再次登录时可在浏览器中选择账号。") }
+            isLoading = false
+        }
+    }
+
+    func stopLookup() {
         lookup?.cancel()
         isLoading = false
     }
@@ -210,7 +301,7 @@ private struct AccountSettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(form.accounts, id: \.id) { account in
                             Button {
-                                form.load(account)
+                                if account.kind == .chatGPT { form.editChatGPT() } else { form.load(account) }
                             } label: {
                                 HStack {
                                     Text(account.name).lineLimit(1)
@@ -227,7 +318,10 @@ private struct AccountSettingsView: View {
                         }
                     }
                 }
-                Menu("添加服务") {
+                if !form.accounts.contains(where: { $0.kind == .chatGPT }) {
+                    Button("ChatGPT 账号") { form.editChatGPT() }
+                }
+                Menu("添加 API 服务") {
                     ForEach(AccountPreset.allCases, id: \.self) { preset in
                         Button(preset.rawValue) { form.load(preset.account) }
                     }
@@ -240,46 +334,70 @@ private struct AccountSettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
-                        Text(form.saved ? "编辑 AI 服务" : "连接 AI 服务").font(.title2)
-                        LabeledContent("服务名称") { TextField("例如：研究用账号", text: $form.draft.name) }
-                        Picker("API 类型", selection: Binding(get: { form.draft.kind }, set: {
-                            form.draft.kind = $0
-                            form.endpointChanged()
-                        })) {
-                            Text("OpenAI 兼容").tag(ProviderKind.openAICompatible)
-                            Text("Anthropic").tag(ProviderKind.anthropic)
-                        }
-                        LabeledContent("API 地址") {
-                            TextField("https://…/v1", text: Binding(get: { form.draft.baseURL }, set: {
-                                form.draft.baseURL = $0
-                                form.endpointChanged()
-                            }))
-                        }
-                        LabeledContent("API 密钥") {
-                            SecureField(form.saved ? "留空沿用已存密钥" : "输入服务提供的密钥", text: Binding(get: { form.key }, set: {
-                                form.key = $0
-                                form.credentialsChanged()
-                            }))
-                        }
-                        Divider()
-                        HStack {
-                            Button("读取可用模型") { form.discover() }
-                                .disabled(form.isLoading || form.draft.baseURL.isEmpty)
-                            if form.isLoading {
-                                ProgressView().controlSize(.small)
-                            } else if !form.draft.discoveredModels.isEmpty {
-                                Text("已读取 \(form.draft.discoveredModels.count) 个").foregroundStyle(.secondary)
+                        if form.draft.kind == .chatGPT {
+                            Text("ChatGPT 账号").font(.title2)
+                            Text("在浏览器中授权 WordMath 使用你的 ChatGPT 套餐。模型列表由所选账号返回。")
+                                .font(.callout).foregroundStyle(.secondary)
+                            if form.connected {
+                                Text(form.accountLabel ?? "已连接 ChatGPT")
+                                HStack {
+                                    Button("刷新可用模型") { form.refreshChatGPT() }.disabled(form.isLoading)
+                                    Link("管理 ChatGPT 用量", destination: URL(string: "https://chatgpt.com/settings/usage")!)
+                                }
+                            } else {
+                                Button("使用 ChatGPT 登录") { form.refreshChatGPT(login: true) }.disabled(form.isLoading)
                             }
-                        }
-                        LabeledContent("手动模型 ID") {
-                            TextField("多个 ID 用逗号分隔", text: $form.manual)
+                            if !form.registrations.isEmpty {
+                                Menu("切换 ChatGPT 账号") {
+                                    ForEach(form.registrations.keys.sorted(), id: \.self) { id in
+                                        Button(form.registrations[id] ?? id) { form.refreshChatGPT(login: true, savedID: id) }
+                                    }
+                                    Button("登录其他账号…") { form.refreshChatGPT(login: true, registerNew: true) }
+                                }.disabled(form.isLoading)
+                            }
+                            if form.isLoading { ProgressView().controlSize(.small) }
+                        } else {
+                            Text(form.saved ? "编辑 AI 服务" : "连接 AI 服务").font(.title2)
+                            LabeledContent("服务名称") { TextField("例如：研究用账号", text: $form.draft.name) }
+                            Picker("API 类型", selection: Binding(get: { form.draft.kind }, set: {
+                                form.draft.kind = $0
+                                form.endpointChanged()
+                            })) {
+                                Text("OpenAI 兼容").tag(ProviderKind.openAICompatible)
+                                Text("Anthropic").tag(ProviderKind.anthropic)
+                            }
+                            LabeledContent("API 地址") {
+                                TextField("https://…/v1", text: Binding(get: { form.draft.baseURL }, set: {
+                                    form.draft.baseURL = $0
+                                    form.endpointChanged()
+                                }))
+                            }
+                            LabeledContent("API 密钥") {
+                                SecureField(form.saved ? "留空沿用已存密钥" : "输入服务提供的密钥", text: Binding(get: { form.key }, set: {
+                                    form.key = $0
+                                    form.credentialsChanged()
+                                }))
+                            }
+                            Divider()
+                            HStack {
+                                Button("读取可用模型") { form.discover() }
+                                    .disabled(form.isLoading || form.draft.baseURL.isEmpty)
+                                if form.isLoading {
+                                    ProgressView().controlSize(.small)
+                                } else if !form.draft.discoveredModels.isEmpty {
+                                    Text("已读取 \(form.draft.discoveredModels.count) 个").foregroundStyle(.secondary)
+                                }
+                            }
+                            LabeledContent("手动模型 ID") {
+                                TextField("多个 ID 用逗号分隔", text: $form.manual)
+                            }
                         }
                         Picker("默认模型", selection: Binding(
                             get: { form.available.contains(form.defaultID) ? form.defaultID : "" },
                             set: { form.defaultID = $0 }
                         )) {
                             Text("沿用当前默认设置").tag("")
-                            ForEach(form.available, id: \.self) { Text($0).tag($0) }
+                            ForEach(form.available, id: \.self) { Text(form.draft.modelLabels?[$0] ?? $0).tag($0) }
                         }
                         if !form.status.isEmpty {
                             Text(form.status)
@@ -293,7 +411,10 @@ private struct AccountSettingsView: View {
                 }
                 Divider()
                 HStack {
-                    if form.saved {
+                    if form.draft.kind == .chatGPT && (form.connected || form.saved) {
+                        Button("断开 ChatGPT 连接", role: .destructive) { confirmingRemoval = true }
+                            .disabled(form.isLoading)
+                    } else if form.saved {
                         Button("移除服务", role: .destructive) { confirmingRemoval = true }
                     } else if form.accounts.isEmpty {
                         Button("在 Word 中试用排版示例", action: showExample)
@@ -301,7 +422,7 @@ private struct AccountSettingsView: View {
                     Spacer()
                     Button("关闭", action: close).keyboardShortcut(.cancelAction)
                     Button("保存设置") { form.save() }.keyboardShortcut(.defaultAction)
-                        .disabled(form.isLoading)
+                        .disabled(form.isLoading || (form.draft.kind == .chatGPT && (!form.saved || !form.connected)))
                 }
             }
             .padding(20)
@@ -309,9 +430,11 @@ private struct AccountSettingsView: View {
         .frame(minWidth: 630, minHeight: 440)
         .alert("移除“\(form.draft.name)”？", isPresented: $confirmingRemoval) {
             Button("取消", role: .cancel) {}
-            Button("移除", role: .destructive) { form.remove() }
+            Button("移除", role: .destructive) {
+                if form.draft.kind == .chatGPT { form.disconnectChatGPT() } else { form.remove() }
+            }
         } message: {
-            Text("此服务的配置和对应的已存密钥将从本机移除。")
+            Text(form.draft.kind == .chatGPT ? "断开后，此账号的套餐模型将从选择器中移除。" : "此服务的配置和对应的已存密钥将从本机移除。")
         }
     }
 }

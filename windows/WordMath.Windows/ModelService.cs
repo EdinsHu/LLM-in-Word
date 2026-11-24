@@ -16,7 +16,8 @@ namespace WordMath.Windows;
 
 public sealed record ModelChoice(
     [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("label")] string Label);
+    [property: JsonPropertyName("label")] string Label,
+    [property: JsonPropertyName("usesChatGPTPlan")] bool UsesChatGPTPlan = false);
 public sealed record ModelReply(string Text, string Receipt);
 internal enum ModelProtocol { OpenAI, Anthropic }
 internal sealed record ModelAccount(Guid Id, string Name, ModelProtocol Protocol, string Endpoint,
@@ -38,6 +39,17 @@ public sealed partial class ModelService
     private readonly ModelSecretStore storage;
     private readonly HttpClient http;
     private ModelConfiguration config;
+    private const string ChatPrefix = "chatgpt/";
+    internal ChatGptSession ChatGpt { get; }
+    private ChatGptModel[] catalog = [];
+    private string? catalogProfile;
+    private string? pausedUsageProfile;
+    private long catalogRevision;
+    internal IReadOnlyList<ChatGptModel> ChatModels =>
+        ChatGpt.CanUsePlan && ChatGpt.ProfileID == catalogProfile ? catalog : [];
+    internal string ChatChoiceID(string slug) => ChatPrefix + Uri.EscapeDataString(ChatGpt.ProfileID ?? "") + "/" + slug;
+    private static bool IsChatID(string? value) => value?.StartsWith(ChatPrefix, StringComparison.Ordinal) == true;
+
 
     public ModelService() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "WordMath", "models-v1.dpapi"), Client) { }
@@ -46,6 +58,7 @@ public sealed partial class ModelService
 
     private ModelService(string path, HttpClient client)
     {
+        ChatGpt = new ChatGptSession(Path.GetDirectoryName(path)!);
         storage = new ModelSecretStore(path);
         http = client;
         config = storage.Read();
@@ -53,8 +66,46 @@ public sealed partial class ModelService
 
     internal IReadOnlyList<ModelAccount> Accounts => config.Accounts;
     public IReadOnlyList<ModelChoice> Models => config.Accounts.SelectMany(account =>
-        account.ModelNames.Select(name => new ModelChoice(account.ChoiceId(name), name + " · " + account.Name))).ToArray();
-    public string? DefaultModelID => config.DefaultID;
+        account.ModelNames.Select(name => new ModelChoice(account.ChoiceId(name), name + " · " + account.Name)))
+        .Concat(ChatModels.Select(m => new ModelChoice(ChatChoiceID(m.Slug), m.Name + " · ChatGPT", true))).ToArray();
+    public string? DefaultModelID => IsChatID(config.DefaultID) && !Models.Any(m => m.Id == config.DefaultID)
+        ? "unavailable:" + config.DefaultID : config.DefaultID;
+
+    internal async Task RefreshChatModelsAsync(CancellationToken cancellation, bool resumeUsage = false)
+    {
+        long revision = ++catalogRevision;
+        catalog = [];
+        catalogProfile = null;
+        if (!ChatGpt.CanUsePlan || ChatGpt.ProfileID is not string profile) return;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        try
+        {
+            string token = await ChatGpt.AccessTokenAsync(timeout.Token, expectedProfileId: profile);
+            if (profile != ChatGpt.ProfileID || revision != catalogRevision) return;
+            var models = await ChatGptProvider.CatalogAsync(http, token, timeout.Token);
+            if (profile != ChatGpt.ProfileID || revision != catalogRevision || !ChatGpt.CanUsePlan) return;
+            catalog = models;
+            catalogProfile = profile;
+            if (resumeUsage && pausedUsageProfile == profile) pausedUsageProfile = null;
+        }
+        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+        { throw new TimeoutException("读取 ChatGPT 模型列表超时，请在模型设置中重试。"); }
+    }
+
+    internal void SelectChatDefault(ChatGptModel model)
+    {
+        if (!ChatModels.Contains(model)) throw new InvalidOperationException("此模型已不可用，请刷新 ChatGPT 模型列表。");
+        Persist(config.Accounts.ToList(), ChatChoiceID(model.Slug));
+    }
+
+    internal async Task DisconnectChatAsync(CancellationToken cancellation)
+    {
+        ++catalogRevision;
+        catalog = [];
+        catalogProfile = null;
+        await ChatGpt.SignOutAsync(cancellation);
+    }
 
     internal static string[] NormalizeNames(IEnumerable<string> names) =>
         names.Select(s => s.Trim()).Where(s => s.Length != 0).Distinct(StringComparer.Ordinal).ToArray();
@@ -98,7 +149,7 @@ public sealed partial class ModelService
     private void Persist(List<ModelAccount> accounts, string? requested)
     {
         var ids = accounts.SelectMany(account => account.ModelNames.Select(account.ChoiceId)).ToArray();
-        var next = new ModelConfiguration(accounts.ToArray(), requested is not null && ids.Contains(requested, StringComparer.Ordinal)
+        var next = new ModelConfiguration(accounts.ToArray(), requested is not null && (IsChatID(requested) || ids.Contains(requested, StringComparer.Ordinal))
             ? requested : ids.FirstOrDefault());
         storage.Write(next);
         config = next;
@@ -191,6 +242,27 @@ public sealed partial class ModelService
     public async Task<ModelReply> GenerateAsync(string modelID, string prompt, CancellationToken cancellation)
     {
         if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("请输入所需的数学内容。");
+        if (IsChatID(modelID))
+        {
+            string? profile = catalogProfile;
+            var selected = ChatModels.FirstOrDefault(m => ChatChoiceID(m.Slug) == modelID)
+                ?? throw new InvalidOperationException("此 ChatGPT 模型不在当前账号的可用列表中，请刷新模型列表。");
+            if (pausedUsageProfile == profile)
+                throw new InvalidOperationException("此账号的 ChatGPT 套餐请求已暂停。请检查套餐用量，恢复后在设置中点击「刷新模型」。");
+            string token = await ChatGpt.AccessTokenAsync(cancellation, expectedProfileId: profile);
+            if (!ChatGpt.CanUsePlan || ChatGpt.ProfileID != profile || !ChatModels.Contains(selected))
+                throw new InvalidOperationException("ChatGPT 账号已改变，请重新选择模型。");
+            ModelReply result;
+            try { result = await ChatGptProvider.GenerateAsync(http, token, selected.Slug, SystemInstruction.Value, prompt, cancellation); }
+            catch (ChatGptUsageLimitException)
+            {
+                pausedUsageProfile = profile;
+                throw;
+            }
+            if (!ChatGpt.CanUsePlan || ChatGpt.ProfileID != profile)
+                throw new InvalidOperationException("ChatGPT 账号已改变，请重新生成。");
+            return result;
+        }
         var account = config.Accounts.FirstOrDefault(a => a.ModelNames.Any(name => a.ChoiceId(name) == modelID))
             ?? throw new ArgumentException("所选模型已不存在，请重新选择。");
         string model = account.ModelNames.First(name => account.ChoiceId(name) == modelID);

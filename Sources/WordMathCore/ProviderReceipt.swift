@@ -18,7 +18,7 @@ public struct ProviderReceipt: Equatable, Sendable {
         case .openAICompatible:
             self.inputTokens = Self.tokenCount(usage?["prompt_tokens"])
             self.outputTokens = Self.tokenCount(usage?["completion_tokens"])
-        case .anthropic:
+        case .anthropic, .chatGPT:
             self.inputTokens = Self.tokenCount(usage?["input_tokens"])
             self.outputTokens = Self.tokenCount(usage?["output_tokens"])
         }
