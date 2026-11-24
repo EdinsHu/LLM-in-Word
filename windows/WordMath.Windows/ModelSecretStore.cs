@@ -55,15 +55,20 @@ internal sealed class ModelSecretStore(string path)
 
     public ModelConfiguration Read()
     {
-        if (!File.Exists(path)) return new ModelConfiguration([], null);
+        ModelConfiguration? saved = ReadProtected<ModelConfiguration>();
+        if (saved is null) return new ModelConfiguration([], null);
+        return saved.Accounts is not null ? saved : throw new InvalidDataException("模型配置损坏。");
+    }
+
+    internal T? ReadProtected<T>() where T : class
+    {
+        if (!File.Exists(path)) return null;
         try
         {
             byte[] clear = Transform(File.ReadAllBytes(path), false);
             try
             {
-                ModelConfiguration? saved = JsonSerializer.Deserialize<ModelConfiguration>(clear);
-                if (saved?.Accounts is null) throw new InvalidDataException();
-                return saved;
+                return JsonSerializer.Deserialize<T>(clear) ?? throw new InvalidDataException();
             }
             finally { CryptographicOperations.ZeroMemory(clear); }
         }
@@ -73,7 +78,9 @@ internal sealed class ModelSecretStore(string path)
         }
     }
 
-    public void Write(ModelConfiguration state)
+    public void Write(ModelConfiguration state) => WriteProtected(state);
+
+    internal void WriteProtected<T>(T state)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         byte[] clear = JsonSerializer.SerializeToUtf8Bytes(state);
