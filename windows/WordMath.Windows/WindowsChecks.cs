@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.Json;
 using System.Windows.Forms;
 
 namespace WordMath.Windows;
@@ -40,12 +42,25 @@ internal static class WindowsChecks
         string report = Path.Combine(directory, $"word-{DateTime.Now:yyyyMMdd-HHmmss}-{Environment.ProcessId}.json");
         try
         {
-            WordLiveProbe.Run(report);
+            var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false };
+            start.ArgumentList.Add("--word-live-test");
+            start.ArgumentList.Add(report);
+            using var test = Process.Start(start) ?? throw new InvalidOperationException("无法启动 Word 测试。");
+            if (!test.WaitForExit(120_000))
+            {
+                test.Kill(); // Only the test client, never the user's Word application.
+                throw new TimeoutException("桌面 Word 未及时响应，请检查 Word 是否正在等待激活或其他操作。");
+            }
+            if (test.ExitCode != 0 || !File.Exists(report))
+                throw new InvalidOperationException(File.Exists(report)
+                    ? JsonSerializer.Deserialize<JsonElement>(File.ReadAllText(report)).GetProperty("error").GetString()
+                    : "测试进程未能生成报告。");
             MessageBox.Show($"Word 写入测试通过。报告保存在：\n{report}", "WordMath", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return 0;
         }
         catch (Exception error)
         {
+            if (!File.Exists(report)) File.WriteAllText(report, JsonSerializer.Serialize(new { passed = false, error = error.Message }));
             MessageBox.Show($"Word 写入测试未通过。\n{error.Message}\n报告位置：\n{report}", "WordMath", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }

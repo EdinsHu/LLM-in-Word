@@ -268,7 +268,7 @@ internal sealed class PanelForm : Form
     {
         if (closed) return;
         try { await Call("error", ex.Message); }
-        catch (Exception) when (closed || Browser.IsDisposed) { }
+        catch (Exception uiError) { if (!closed) StartupFailure(uiError); }
     }
 
     protected override void Dispose(bool disposing)

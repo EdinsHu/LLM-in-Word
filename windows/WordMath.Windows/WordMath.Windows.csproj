@@ -21,4 +21,10 @@
     <Content Include="../../LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../tests/PanelSmoke.cs" Link="Diagnostics/PanelSmoke.cs" />
   </ItemGroup>
+  <!-- WebView2 also imports its WPF assembly. This host uses only the WinForms control. -->
+  <Target Name="UseWinFormsWebViewOnly" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
 </Project>

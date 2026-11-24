@@ -230,8 +230,11 @@ public static partial class DocumentEngine
                 payload = obj.ContainsKey("value") ? obj["value"] : obj[tag];
             else
             {
-                var named = (JsonObject)obj.DeepClone();
-                named.Remove("type");
+                string[]? names = tag == "delimit" ? ["left", "right", "body"] : Roles.GetValueOrDefault(tag);
+                if (names == null || obj.Count != names.Length + 1 || !names.All(obj.ContainsKey))
+                    throw Fault(path, "数学节点含多余字段或缺少所需操作数");
+                var named = new JsonObject();
+                foreach (string name in names) named[name] = obj[name]?.DeepClone();
                 payload = named;
             }
         }

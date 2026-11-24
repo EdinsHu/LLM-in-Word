@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -18,6 +19,9 @@ public static class WordLiveProbe
     private static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
     // Exercises the production ZIP/WordprocessingML path without launching Office.
     public static void VerifyPackage()
@@ -60,19 +64,31 @@ public static class WordLiveProbe
         try
         {
             using var refs = new ComScope();
+            var existingWord = new HashSet<uint>();
+            foreach (var process in Process.GetProcessesByName("WINWORD"))
+                using (process) existingWord.Add((uint)process.Id);
             var wordType = Type.GetTypeFromProgID("Word.Application", throwOnError: true)!;
             dynamic app = refs.Keep(Activator.CreateInstance(wordType)!);
             dynamic documents = refs.Keep(app.Documents);
-            bool startedEmpty = (int)documents.Count == 0;
+            if ((int)documents.Count != 0)
+                throw new InvalidOperationException("无法启动独立的 Word 测试实例。请重试。");
+            bool ownProcess = false;
+            int? previousAlerts = null;
             dynamic doc = documents.Add();
             try
             {
                 wordVersion = (string)app.Version;
-                app.Visible = true;
                 dynamic window = refs.Keep(doc.ActiveWindow);
+                var hwnd = new IntPtr((int)window.Hwnd);
+                GetWindowThreadProcessId(hwnd, out uint wordPid);
+                ownProcess = wordPid != 0 && !existingWord.Contains(wordPid);
+                if (!ownProcess)
+                    throw new InvalidOperationException("Word 未创建独立进程，已取消测试。");
+                previousAlerts = (int)app.DisplayAlerts;
+                app.DisplayAlerts = 0;
+                app.Visible = true;
                 app.Activate();
                 window.Activate();
-                var hwnd = new IntPtr((int)window.Hwnd);
                 SetForegroundWindow(hwnd);
                 for (var attempt = 0; attempt < 20 && GetForegroundWindow() != hwnd; attempt++) Thread.Sleep(100);
                 Check(GetForegroundWindow() == hwnd, "active-test-window");
@@ -147,7 +163,8 @@ public static class WordLiveProbe
                 finally
                 {
                     ComScope.Release(doc);
-                    if (startedEmpty && (int)documents.Count == 0) app.Quit(0);
+                    if (previousAlerts.HasValue) app.DisplayAlerts = previousAlerts.Value;
+                    if (ownProcess && (int)documents.Count == 0) app.Quit(0);
                 }
             }
             Write(true, null);

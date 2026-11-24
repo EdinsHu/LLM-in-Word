@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Windows.Forms;
 
 namespace WordMath.Windows;
@@ -71,12 +70,7 @@ internal sealed class WordHotKey : NativeWindow, IDisposable
         }
     }
 
-    private static bool IsWord(nint window)
-    {
-        if (window == 0) return false;
-        var name = new StringBuilder(64);
-        return GetClassName(window, name, name.Capacity) > 0 && name.ToString() == "OpusApp";
-    }
+    private static bool IsWord(nint window) => window != 0 && WordBridge.ClassName(window) == "OpusApp";
 
     protected override void WndProc(ref Message m)
     {
@@ -101,7 +95,6 @@ internal sealed class WordHotKey : NativeWindow, IDisposable
     [DllImport("user32.dll")] private static extern bool UnregisterHotKey(nint hwnd, int id);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterWindowMessage(string name);
     [DllImport("user32.dll")] private static extern bool PostMessage(nint hwnd, int msg, nint wparam, nint lparam);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(nint hwnd, StringBuilder name, int length);
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(nint hwnd);
 }

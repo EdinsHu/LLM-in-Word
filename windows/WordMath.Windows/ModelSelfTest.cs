@@ -12,6 +12,26 @@ namespace WordMath.Windows;
 
 public sealed partial class ModelService
 {
+    // This client has no network transport. Pass just the real user message to the fixture.
+    internal static ModelService CreatePanelFixture(string directory, Func<string, string> reply, out HttpClient client)
+    {
+        var handler = new ModelTestHandler();
+        handler.Respond = async request =>
+        {
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!;
+            var prompt = body["messages"]!.AsArray().Last()!["content"]!.GetValue<string>();
+            var result = new { model = "panel-fixture", usage = new { prompt_tokens = 5, completion_tokens = 3 },
+                choices = new[] { new { finish_reason = "stop", message = new { content = reply(prompt) } } } };
+            return Ok(System.Text.Json.JsonSerializer.Serialize(result));
+        };
+        client = new HttpClient(handler);
+        var service = new ModelService(Path.Combine(directory, "panel-fixture.dpapi"), client);
+        var account = service.Prepare(Guid.NewGuid(), "面板测试服务", ModelProtocol.OpenAI,
+            "https://panel.invalid/v1", ["panel-fixture"], "");
+        service.Save(account, "panel-fixture");
+        return service;
+    }
+
     // Runs with isolated DPAPI storage and a fake HTTP handler (including for official service hosts).
     public static async Task SelfTestAsync()
     {

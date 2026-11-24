@@ -33,6 +33,7 @@ internal static class PanelSmoke
                 {
                     panel.Show();
                     await ExerciseAsync(panel, target).WaitAsync(TimeSpan.FromSeconds(75));
+                    await ExerciseConversationAsync(temporaryDirectory).WaitAsync(TimeSpan.FromSeconds(50));
                 }
                 catch (Exception error)
                 {
@@ -49,7 +50,7 @@ internal static class PanelSmoke
             Application.Run(loop);
             if (failure != null)
                 throw new InvalidOperationException("Windows panel self-test failed", failure);
-            Console.WriteLine("PASS: WebView2 offline preview, local editing, Ctrl+Enter and mixed Word XML.");
+            Console.WriteLine("PASS: WebView2 preview/edit/insert, model generation, block repair and selected follow-up.");
             return 0;
         }
         finally
@@ -82,16 +83,23 @@ internal static class PanelSmoke
         await panel.Browser.ExecuteScriptAsync("setTimeout(() => document.getElementById('settings').click(), 50)");
         var clock = Stopwatch.StartNew();
         ModelSettingsForm? settings;
-        while ((settings = Application.OpenForms.OfType<ModelSettingsForm>().SingleOrDefault()) == null)
+        while ((settings = Application.OpenForms.OfType<ModelSettingsForm>().SingleOrDefault()) == null ||
+            !settings.IsHandleCreated || !settings.Visible || settings.CancelButton is not Button { CanSelect: true })
         {
             if (clock.Elapsed >= TimeSpan.FromSeconds(12))
                 throw new TimeoutException("Opening model settings from the input panel.");
             await Task.Delay(75);
         }
-        settings.CancelButton?.PerformClick();
-        await Task.Yield();
-        if (Application.OpenForms.OfType<ModelSettingsForm>().Any())
-            throw new InvalidOperationException("Closing Settings left the window open.");
+        settings.CancelButton!.PerformClick();
+        // ShowDialog has its own nested message loop. Yielding directly can resume
+        // before it unwinds; wait for actual visibility and owner interactivity.
+        clock.Restart();
+        while ((!settings.IsDisposed && settings.Visible) || !panel.Enabled)
+        {
+            if (clock.Elapsed >= TimeSpan.FromSeconds(8))
+                throw new InvalidOperationException("Closing Settings left a visible dialog or disabled the input panel.");
+            await Task.Delay(75);
+        }
         await WaitForPageAsync(panel, "!document.getElementById('previewArea').hidden", "preserved draft after closing Settings");
 
         const string editedText = "局部修改 <A&B> 保留文字";
@@ -131,6 +139,82 @@ internal static class PanelSmoke
         if (!root.Descendants(word + "t").Any(t => t.Value == editedText) || !root.Descendants(math + "oMath").Any())
             throw new InvalidOperationException("Inserted XML lost the edited paragraph text or editable math.");
     }
+
+    private static async Task ExerciseConversationAsync(string directory)
+    {
+        const string initial = "给出哈密顿–凯莱定理的证明";
+        const string revision = "把选中的 A 改为 B";
+        const string unmodified = """{"type":"paragraph","inlines":[{"text":"keep-original"}]}""";
+        const string broken = """{"type":"equation","math":{"frac":[{"symbol":"A"}]}}""";
+        const string repaired = """{"type":"equation","math":{"frac":[{"symbol":"A"},{"number":"2"}]}}""";
+        var prompts = new List<string>();
+        string Respond(string prompt)
+        {
+            prompts.Add(prompt);
+            return prompts.Count switch
+            {
+                1 => """{"blocks":[""" + unmodified + "," + broken + "]}",
+                // A well-formed response of the wrong block type must not be merged.
+                2 => """{"blocks":[{"type":"paragraph","inlines":[{"text":"wrong-kind"}]}]}""",
+                3 => """{"blocks":[""" + repaired + "]}",
+                4 => """{"blocks":[""" + unmodified + "," + repaired.Replace("A", "B") + "]}",
+                _ => throw new InvalidOperationException("Unexpected provider request in panel test.")
+            };
+        }
+
+        var models = ModelService.CreatePanelFixture(directory, Respond, out var http);
+        using var client = http;
+        var target = new CaptureTarget();
+        using var panel = new PanelForm(models, target);
+        panel.Show();
+        await panel.Ready;
+        await SubmitPromptAsync(panel, initial);
+        await WaitForPageAsync(panel, "!document.getElementById('repairBar').hidden", "explicit repair offer");
+        if (prompts.Count != 1 || prompts[0] != initial || target.Xml.Task.IsCompleted)
+            throw new InvalidOperationException("Invalid content was auto-repaired, prematurely inserted or the prompt changed.");
+
+        await panel.Browser.ExecuteScriptAsync("document.getElementById('repair').click()");
+        await WaitForPageAsync(panel, """
+            !document.getElementById('repairBar').hidden &&
+            document.getElementById('status').textContent.includes('修复排版未完成')
+            """, "rejected wrong block type");
+        await panel.Browser.ExecuteScriptAsync("document.getElementById('repair').click()");
+        await WaitForPageAsync(panel, """
+            !!document.querySelector('#preview math mfrac') &&
+            document.getElementById('preview').textContent.includes('keep-original') &&
+            document.getElementById('receipt').textContent.includes('panel-fixture')
+            """, "merged original text and repaired equation");
+        if (prompts.Count != 3 || prompts[1] != prompts[2] ||
+            prompts[1].Contains("keep-original") || !prompts[1].Contains("frac"))
+            throw new InvalidOperationException("Repair was not restricted to the original damaged equation.");
+
+        // Select a specific numerator in the real preview before asking the follow-up.
+        await panel.Browser.ExecuteScriptAsync("""
+            document.querySelector('#preview mfrac [data-edit]').dispatchEvent(new MouseEvent('click', {bubbles:true}));
+            document.getElementById('followSelection').click();
+            """);
+        await SubmitPromptAsync(panel, revision);
+        await WaitForPageAsync(panel, "document.querySelector('#preview mfrac mi')?.textContent === 'B'",
+            "updated selected numerator");
+        if (prompts.Count != 4 || !new[] { initial, "keep-original", revision, "/blocks/1/math/frac/0/symbol" }
+            .All(part => prompts[3].Contains(part, StringComparison.Ordinal)))
+            throw new InvalidOperationException("Follow-up lost the initial prompt, reviewed content or selection.");
+        await panel.Browser.ExecuteScriptAsync("setTimeout(() => document.getElementById('insert').click(), 50)");
+        string xml = await target.Xml.Task.WaitAsync(TimeSpan.FromSeconds(12));
+        XNamespace word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        XNamespace math = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+        XElement root = XElement.Parse($"<root xmlns:w='{word}' xmlns:m='{math}'>{xml}</root>");
+        if (root.Descendants(word + "t").Single().Value != "keep-original" ||
+            root.Descendants(math + "num").Single().Value != "B" || root.Descendants(math + "den").Single().Value != "2")
+            throw new InvalidOperationException("Final insertion did not use the revised preview.");
+    }
+
+    private static Task SubmitPromptAsync(PanelForm panel, string text) =>
+        panel.Browser.ExecuteScriptAsync($"""
+            document.getElementById('prompt').value = {JsonSerializer.Serialize(text)};
+            document.getElementById('prompt').dispatchEvent(new Event('input'));
+            document.getElementById('promptForm').requestSubmit();
+            """);
 
     private static async Task WaitForPageAsync(PanelForm panel, string condition, string description)
     {
