@@ -145,11 +145,40 @@ public sealed partial class ModelService
         await CheckFailure("data: [DONE]\n\n", "中断");
         await CheckFailure("data: {\"type\":\"response.incomplete\"}\n\n", "未完成");
         await CheckFailure("", "中断");
+        using var cancel = new CancellationTokenSource();
+        using var stalled = new WaitingResponseStream();
+        handler.Respond = _ =>
+        {
+            var content = new StreamContent(stalled);
+            content.Headers.ContentType = new("text/event-stream");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        };
+        var generation = ChatGptProvider.GenerateAsync(http, mockToken, "z", "s", "p", cancel.Token);
+        await stalled.Reading.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancel.Cancel();
+        try
+        {
+            await generation.WaitAsync(TimeSpan.FromSeconds(3));
+            throw new InvalidOperationException("取消 ChatGPT 响应后不应产生预览。");
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
+
         handler.Respond = _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden) {
             Content = new StringContent("""{"detail":"sensitive-reply"}""") });
         try { await ChatGptProvider.CatalogAsync(http, mockToken, CancellationToken.None); }
         catch (InvalidOperationException error) when (error.Message.Contains("403") && !error.Message.Contains("sensitive-reply")) { return; }
         throw new InvalidOperationException("ChatGPT 访问权限错误未正确处理");
+    }
+
+    private sealed class WaitingResponseStream : MemoryStream
+    {
+        internal TaskCompletionSource Reading { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            Reading.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
     }
 
     private sealed class ModelTestHandler : HttpMessageHandler
