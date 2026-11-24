@@ -1,0 +1,64 @@
+name: Publish tested Windows installer
+on:
+  push:
+    branches: [windows-port, main]
+    paths: [.github/windows-preview.json]
+  workflow_dispatch:
+permissions: {}
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/windows-port' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    concurrency: windows-release-preview
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Publish the installer that passed Windows installation tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          manifest=.github/windows-preview.json
+          version=$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9]+$"))' "$manifest")
+          source=$(jq -er '.commit | select(test("^[0-9a-f]{40}$"))' "$manifest")
+          run=$(jq -er '.run_id | numbers' "$manifest")
+          artifact=$(jq -er '.artifact_id | numbers' "$manifest")
+          checksum=$(jq -er '.sha256 | select(test("^[a-f0-9]{64}$"))' "$manifest")
+          archive="WordMath-$version-windows-x64-setup.exe"
+          tag="v$version"
+          notes="releases/$tag.md"
+          test -s "$notes"
+          api="repos/$GITHUB_REPOSITORY"
+          gh api "$api/actions/runs/$run" | jq -e --arg source "$source" '
+            .head_sha == $source and (.head_branch == "windows-port" or .head_branch == "main") and
+            .event == "push" and .path == ".github/workflows/windows-package.yml" and .conclusion == "success"'
+          gh api "$api/actions/artifacts/$artifact" | jq -e --argjson run "$run" --arg name "$archive" --arg digest "sha256:$checksum" '
+            .workflow_run.id == $run and .name == $name and .digest == $digest and (.expired | not)'
+          gh api "$api/actions/artifacts/$artifact/zip" > "$archive"
+          echo "$checksum  $archive" | sha256sum -c
+          test "$(head -c 2 "$archive")" = MZ
+          gh api "$api/git/matching-refs/tags/$tag" | jq -e --arg tag "refs/tags/$tag" --arg sha "$source" '
+            all(.[] | select(.ref == $tag); .object.sha == $sha)'
+          if ! gh release view "$tag" --json databaseId,targetCommitish,isDraft,isPrerelease,assets > "$RUNNER_TEMP/release.json"; then
+            gh release create "$tag" --draft --prerelease --target "$source" --title "WordMath $version · Windows x64" --notes-file "$notes"
+            gh release view "$tag" --json databaseId,targetCommitish,isDraft,isPrerelease,assets > "$RUNNER_TEMP/release.json"
+          fi
+          release="$RUNNER_TEMP/release.json"
+          jq -e --arg source "$source" '.targetCommitish == $source and .isPrerelease' "$release"
+          if jq -e '.isDraft and (.assets | length == 0)' "$release"; then
+            gh release upload "$tag" "$archive"
+          fi
+          id=$(jq -er '.databaseId' "$release")
+          gh api "$api/releases/$id" | jq -e --arg name "$archive" --arg digest "sha256:$checksum" '
+            (.assets | length == 1) and .assets[0].name == $name and .assets[0].digest == $digest'
+          if jq -e '.isDraft' "$release"; then
+            gh release edit "$tag" --draft=false --prerelease --latest=false
+          fi
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$tag/$archive" -o "$RUNNER_TEMP/public.exe"
+          echo "$checksum  $RUNNER_TEMP/public.exe" | sha256sum -c
