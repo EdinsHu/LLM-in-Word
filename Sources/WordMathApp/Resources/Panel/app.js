@@ -11,7 +11,12 @@
     draft: null, originalPrompt: '', mode: 'revision',
     activeNode: null, scopePath: null, pending: null, busy: false, isExample: false
   };
-  const post = message => window.webkit.messageHandlers.wordmath.postMessage(message);
+  const windowsHost = window.chrome?.webview;
+  const post = windowsHost
+    ? message => windowsHost.postMessage(message)
+    : message => window.webkit.messageHandlers.wordmath.postMessage(message);
+  const insertModifier = event => windowsHost ? event.ctrlKey : event.metaKey;
+  if (windowsHost) byID('insert').querySelector('kbd').textContent = 'Ctrl+↵';
   let lastHeight = 0;
   let composing = false;
   let compositionEndedAt = -Infinity;
@@ -43,6 +48,7 @@
     const hasModels = model.options.length > 0;
     byID('setupHint').hidden = hasModels || hasDraft;
     byID('example').disabled = state.busy;
+    if (windowsHost) byID('settings').disabled = state.busy;
     byID('previewHint').textContent = state.isExample ? '离线排版示例 · 点选文字或符号可编辑' : '点选文字或符号可编辑';
     model.hidden = !hasModels;
     byID('modeBar').hidden = byID('previewArea').hidden = !hasDraft;
@@ -365,7 +371,7 @@
   preview.addEventListener('click', event => activate(event.target.closest('[data-path]'), true));
 
   preview.addEventListener('keydown', event => {
-    if (event.metaKey || state.busy) return;
+    if (insertModifier(event) || state.busy) return;
     const leaves = Array.from(preview.querySelectorAll('[data-edit]'));
     if (!leaves.length) return;
     const current = leaves.indexOf(preview.querySelector('.selected'));
@@ -382,7 +388,7 @@
 
   document.addEventListener('keydown', event => {
     if (event.isComposing || event.keyCode === 229 || finishingComposition()) return;
-    if (event.metaKey && event.key === 'Enter') { event.preventDefault(); insert(); }
+    if (insertModifier(event) && event.key === 'Enter') { event.preventDefault(); insert(); }
     else if (event.key === 'Escape') {
       event.preventDefault();
       if (state.activeNode && document.activeElement === editValue) {

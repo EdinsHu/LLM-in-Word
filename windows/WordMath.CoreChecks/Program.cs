@@ -72,7 +72,10 @@ internal static class Program
             Expect((string?)style?.Element(W + "sz")?.Attribute(W + "val") == "25",
                    "Chinese text did not inherit the 12.5-point size.");
         }
-        foreach (var leaf in preview.Descendants().Where(e => (string?)e.Attribute("data-edit") == "text"))
+        var editableLeaves = preview.Descendants().Where(e => (string?)e.Attribute("data-edit") == "text").ToList();
+        int expectedLeaves = body.Descendants(W + "t").Count() + body.Descendants(M + "t").Count();
+        Expect(editableLeaves.Count == expectedLeaves, "Every proof symbol and prose span should be editable.");
+        foreach (var leaf in editableLeaves)
         {
             var path = (string?)leaf.Attribute("data-path") ?? throw new InvalidDataException("Missing edit path.");
             var value = Resolve(doc, path)?.GetValue<string>();
