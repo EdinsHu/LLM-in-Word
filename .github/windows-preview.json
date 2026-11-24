@@ -1,7 +1,12 @@
 {
-  "version": "0.2.0-rc.1",
-  "commit": "52dd20a6a5aed0350d102b17c59179b7403ac595",
-  "run_id": 45356578146,
-  "artifact_id": 14902362228,
-  "sha256": "f82dd4b4f785e08d16204951b83de9df30eb0fc7034c7eea7a444ceab679a691"
+  "version": "0.2.0-rc.2",
+  "commit": "909603baadd9a98a8106ab83d0d16893cd17ebcf",
+  "run_id": 45360243578,
+  "artifact_id": 14904730799,
+  "sha256": "6502b323f0d262bd54ddff56358422e20147b83024fc42cb4fc1d83146fbd0f7",
+  "macos": {
+    "run_id": 45360243668,
+    "artifact_id": 14903344946,
+    "sha256": "8f8122921777aabf752867d35a6345b9927087925f2c4cf08414b48f8e317fee"
+  }
 }
