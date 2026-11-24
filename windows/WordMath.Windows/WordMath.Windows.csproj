@@ -17,6 +17,7 @@
     <ProjectReference Include="../WordMath.Core/WordMath.Core.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3650.58" />
     <EmbeddedResource Include="../../Sources/WordMathCore/Content.swift" LogicalName="WordMath.MathSchema.Source" />
+    <EmbeddedResource Include="../WordMath.CoreChecks/Fixtures/cayley-hamilton.json" LogicalName="WordMath.Fixtures.CayleyHamilton" />
     <Content Include="../../Sources/WordMathApp/Resources/Panel/**/*" Link="Assets/Panel/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../tests/PanelSmoke.cs" Link="Diagnostics/PanelSmoke.cs" />

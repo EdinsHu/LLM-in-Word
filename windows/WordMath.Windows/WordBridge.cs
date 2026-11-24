@@ -159,7 +159,13 @@ public sealed class WordTarget : IDisposable
             runFormat.Add(Value("sz", halfPoints), Value("szCs", halfPoints));
         }
         var underline = (int)font.Underline;
-        var line = underline switch { 0 => "none", 1 => "single", 2 => "words", 3 => "double", 4 => "dotted", 6 => "thick", 7 => "dash", 11 => "wave", _ => null };
+        var line = underline switch
+        {
+            0 => "none", 1 => "single", 2 => "words", 3 => "double", 4 => "dotted",
+            6 => "thick", 7 => "dash", 9 => "dotDash", 10 => "dotDotDash", 11 => "wave",
+            20 => "dottedHeavy", 23 => "dashedHeavy", 25 => "dashDotHeavy", 26 => "dashDotDotHeavy",
+            27 => "wavyHeavy", 39 => "dashLong", 43 => "wavyDouble", 55 => "dashLongHeavy", _ => null
+        };
         if (line != null) runFormat.Add(Value("u", line));
         if ((int)font.Superscript == -1) runFormat.Add(Value("vertAlign", "superscript"));
         else if ((int)font.Subscript == -1) runFormat.Add(Value("vertAlign", "subscript"));

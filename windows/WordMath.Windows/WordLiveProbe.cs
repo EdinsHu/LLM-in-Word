@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
+using System.Windows.Forms;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
 using System.Xml.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -55,6 +58,103 @@ public static class WordLiveProbe
             }
             finally { File.Delete(file); }
         }
+    }
+
+    private static void VerifyCayleyHamilton(object documentCollection, Action<bool, string> check)
+    {
+        dynamic documents = documentCollection;
+        using var fixture = typeof(WordLiveProbe).Assembly.GetManifestResourceStream("WordMath.Fixtures.CayleyHamilton")
+            ?? throw new InvalidDataException("Missing Cayley–Hamilton fixture.");
+        using var reader = new StreamReader(fixture);
+        var proof = DocumentEngine.Parse(reader.ReadToEnd());
+        var directory = Directory.CreateTempSubdirectory("WordMath-proof-");
+        string file = Path.Combine(directory.FullName, "proof.docx");
+        const string suffix = "因此任意方阵均满足自己的特征方程。后\r";
+
+        void VerifyDocument(object document, string stage)
+        {
+            dynamic doc = document;
+            using var refs = new ComScope();
+            dynamic content = refs.Keep(doc.Content);
+            dynamic equations = refs.Keep(content.OMaths);
+            dynamic paragraphs = refs.Keep(doc.Paragraphs);
+            string text = (string)content.Text;
+            check(text.StartsWith("前设 ", StringComparison.Ordinal) && text.EndsWith(suffix, StringComparison.Ordinal),
+                "cayley-hamilton-surrounding-text-" + stage);
+            check((int)paragraphs.Count == 9 && (int)equations.Count == 14, "cayley-hamilton-nine-blocks-fourteen-equations-" + stage);
+            dynamic firstText = refs.Keep(doc.Range(1, 2));
+            dynamic font = refs.Keep(firstText.Font);
+            check((string)firstText.Text == "设" && (double)font.Size == 15, "cayley-hamilton-paragraph-font-" + stage);
+            if (stage == "reopened")
+            {
+                // Round-trip a structured display equation through Word's own editing commands.
+                dynamic display = refs.Keep(equations.Item(3));
+                display.Linearize();
+                dynamic linear = refs.Keep(equations.Item(3));
+                linear.BuildUp();
+                dynamic rebuilt = refs.Keep(equations.Item(3));
+                dynamic functions = refs.Keep(rebuilt.Functions);
+                check((int)functions.Count > 0 && (int)equations.Count == 14, "cayley-hamilton-reopened-equation-edit");
+            }
+        }
+
+        try
+        {
+            dynamic draft = documents.Add();
+            try
+            {
+                using var refs = new ComScope();
+                dynamic window = refs.Keep(draft.ActiveWindow);
+                window.Activate();
+                var hwnd = new IntPtr((int)window.Hwnd);
+                SetForegroundWindow(hwnd);
+                for (int i = 0; i < 20 && GetForegroundWindow() != hwnd; i++) Thread.Sleep(100);
+                check(GetForegroundWindow() == hwnd, "cayley-hamilton-active-test-window");
+                dynamic content = refs.Keep(draft.Content);
+                content.Text = "前后";
+                dynamic prefix = refs.Keep(draft.Range(0, 1));
+                dynamic font = refs.Keep(prefix.Font);
+                font.Size = 15;
+                dynamic selection = refs.Keep(window.Selection);
+                selection.SetRange(1, 1);
+                using (var target = WordBridge.Capture())
+                using (var panel = new Form
+                {
+                    Text = "WordMath · 公式插入测试", FormBorderStyle = FormBorderStyle.FixedToolWindow,
+                    TopMost = true, ShowInTaskbar = false, StartPosition = FormStartPosition.Manual,
+                    Size = new Size(250, 70)
+                })
+                {
+                    var screen = Screen.FromHandle(hwnd).WorkingArea;
+                    var caret = target.ScreenPoint ?? new Point(screen.Left + 20, screen.Top + 20);
+                    panel.Location = new Point(Math.Clamp(caret.X, screen.Left, Math.Max(screen.Left, screen.Right - panel.Width)),
+                        Math.Clamp(caret.Y, screen.Top, Math.Max(screen.Top, screen.Bottom - panel.Height)));
+                    panel.Show();
+                    panel.Activate();
+                    SetForegroundWindow(panel.Handle);
+                    panel.Location = new Point(screen.Left + 8, screen.Top + 8);
+                    for (int i = 0; i < 20 && GetForegroundWindow() != panel.Handle; i++)
+                    {
+                        Application.DoEvents();
+                        Thread.Sleep(50);
+                    }
+                    check(GetForegroundWindow() == panel.Handle, "cayley-hamilton-moved-panel-has-focus");
+                    target.Insert(DocumentEngine.BodyXml(proof, target.FontName, target.FontSize));
+                }
+                VerifyDocument((object)draft, "inserted");
+                draft.SaveAs2(FileName: file, FileFormat: 12, AddToRecentFiles: false);
+            }
+            finally { try { draft.Close(0); } finally { ComScope.Release(draft); } }
+
+            dynamic reopened = documents.Open(FileName: file, ConfirmConversions: false, ReadOnly: false, AddToRecentFiles: false);
+            try
+            {
+                check(!(bool)reopened.ReadOnly, "cayley-hamilton-docx-reopened-editable");
+                VerifyDocument((object)reopened, "reopened");
+            }
+            finally { try { reopened.Close(0); } finally { ComScope.Release(reopened); } }
+        }
+        finally { directory.Delete(recursive: true); }
     }
 
     public static void Run(string resultPath)
@@ -156,6 +256,8 @@ public static class WordLiveProbe
                     && (string)style.NameFarEast == expectedEast && (string)style.NameAscii == "Arial", "inherit-prose-font-size-bold");
                 Check((int)selection.Start == (int)selection.End && (int)selection.Start == (int)after.End - 2, "advance-caret");
                 ExpectRejection(() => target.Insert(body), "prevent-duplicate-confirmation");
+
+                VerifyCayleyHamilton((object)documents, Check);
             }
             finally
             {
@@ -171,7 +273,10 @@ public static class WordLiveProbe
         }
         catch (Exception error)
         {
-            Write(false, error.GetBaseException().Message);
+            string detail = error.GetBaseException().Message;
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(profile)) detail = detail.Replace(profile, "%USERPROFILE%", StringComparison.OrdinalIgnoreCase);
+            Write(false, detail);
             throw;
         }
 
@@ -188,7 +293,9 @@ public static class WordLiveProbe
         }
         void Write(bool passed, string? error)
         {
-            File.WriteAllText(resultPath, JsonSerializer.Serialize(new { passed, wordVersion, assertions, error },
+            string? applicationVersion = typeof(WordLiveProbe).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            string windowsVersion = Environment.OSVersion.Version.ToString();
+            File.WriteAllText(resultPath, JsonSerializer.Serialize(new { passed, applicationVersion, windowsVersion, wordVersion, assertions, error },
                 new JsonSerializerOptions { WriteIndented = true }));
         }
     }

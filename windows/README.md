@@ -11,7 +11,7 @@ Windows 版面向 x64 Windows 11 和桌面版 Microsoft Word。它在系统托�
 
 ## 在这台 Windows 上验证 Word 写入
 
-从开始菜单的 **WordMath → Test Word integration** 启动真实 Word 测试。测试会新建独立的 Word 实例和临时文档。请让测试窗口保持前台。它实际检查正文的中文字体和字号、行内和独立公式、原生表格，以及切换文档或移动光标时能否阻止误插。结果保存在 `%LOCALAPPDATA%\WordMath\Diagnostics`。此操作在本机执行，无需 API 密钥。模型生成可另用自己的账号在正常输入面板检验。
+从开始菜单的 **WordMath → Test Word integration** 启动真实 Word 测试。测试会新建独立的 Word 实例和临时文档。请让测试窗口保持前台。它实际检查正文的中文字体和字号、行内和独立公式、原生表格，以及切换文档或移动光标时能否阻止误插。同一套测试还会插入九段哈密顿–凯莱定理证明，保存并重新打开临时 DOCX，然后检查其中的 14 个公式能否继续编辑。结果保存在 `%LOCALAPPDATA%\WordMath\Diagnostics`。此操作在本机执行，无需 API 密钥。模型生成可另用自己的账号在正常输入面板检验。
 
 ## 从源码构建
 

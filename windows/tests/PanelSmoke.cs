@@ -12,6 +12,10 @@ internal static class PanelSmoke
     [DllImport("user32.dll", EntryPoint = "SendMessageW", ExactSpelling = true)]
     private static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowEnabled(IntPtr hwnd);
+
     // Exercise the packaged WebView2 assets, native message bridge and real floating form.
     // This test target captures the generated XML without opening or modifying Word.
     internal static int Run()
@@ -94,7 +98,7 @@ internal static class PanelSmoke
         // ShowDialog has its own nested message loop. Yielding directly can resume
         // before it unwinds; wait for actual visibility and owner interactivity.
         clock.Restart();
-        while ((!settings.IsDisposed && settings.Visible) || !panel.Enabled)
+        while ((!settings.IsDisposed && settings.Visible) || !IsWindowEnabled(panel.Handle))
         {
             if (clock.Elapsed >= TimeSpan.FromSeconds(8))
                 throw new InvalidOperationException("Closing Settings left a visible dialog or disabled the input panel.");
