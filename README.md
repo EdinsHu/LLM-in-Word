@@ -6,7 +6,7 @@ Windows x64 移植版的安装、快捷键和桌面 Word 验证方式见 [Window
 
 ## 下载与安装
 
-使用 Apple Silicon（M 系列）Mac 可从 [GitHub Releases](https://github.com/EdinsHu/LLM-in-Word/releases/latest) 下载安装包。解压后将 `WordMath.app` 拖入“应用程序”并打开。升级时请先从菜单栏退出旧版。
+0.2.0-rc.3 候选版提供 Windows 11 x64 和 Apple Silicon（M 系列）Mac 两种安装包。Mac 用户升级前请从菜单栏退出旧版，解压后将 `WordMath.app` 拖入“应用程序”并打开。[下载 0.2.0-rc.3 候选版](https://github.com/EdinsHu/LLM-in-Word/releases/tag/v0.2.0-rc.3) · [Mac 稳定版](https://github.com/EdinsHu/LLM-in-Word/releases/latest)
 
 ## 构建与启动
 
@@ -31,13 +31,11 @@ WordMath 在同一用户会话中只运行一个实例。再次双击应用或�
 
 登录后，下拉框会列出 OpenAI 向该账号开放的模型。选中套餐模型后，点击面板中的用量链接即可打开 ChatGPT 的用量设置。也可以在同一下拉框中切换到已配置的其他 API 服务。OpenAI 决定账号资格、模型和额度。授权被拒绝、账号不符合条件或额度用尽时，请根据提示处理或主动切换服务。可在账号设置中断开连接，也可在 ChatGPT 中管理 WordMath 的额度和访问权限。[ChatGPT 用量设置](https://chatgpt.com/settings/usage) · [OpenAI 接入说明](https://developers.openai.com/siwc/token-sharing-open-source)
 
-适用于两个平台的安装包见 [0.2.0-rc.2 候选版](https://github.com/EdinsHu/LLM-in-Word/releases/tag/v0.2.0-rc.2)。
-
 ## 使用 API 服务
 
 1. 打开菜单栏中的“模型设置…”。首次运行会自动打开这个窗口。也可先在一份空白 Word 文档中放好光标，点「在 Word 中试用排版示例」体验本地预览和插入。
 2. 从“添加服务”选择 OpenAI、DeepSeek、Anthropic 或自定义兼容服务，填写该服务的 API 地址和密钥。密钥保存在 macOS 钥匙串。此连接方式使用该服务的 API 凭据和额度。
-3. 点击“读取可用模型”。若服务未提供模型列表，手动填写服务端认可的模型 ID，多个 ID 用逗号分隔。选定默认模型后点击“保存设置”。可重复添加其他账号。
+3. 点击“读取可用模型”。若服务未提供模型列表，手动填写服务端认可的模型 ID，多个 ID 用逗号分隔。点击“保存设置”后可继续添加其他账号。
 4. 首次唤起输入框时，允许 WordMath 自动化控制 Microsoft Word。可在“系统设置 → 隐私与安全性 → 自动化”查看授权。若希望面板紧贴文本光标，点击菜单栏的“启用光标定位…”，按提示授予辅助功能权限。无法读取光标坐标时，面板会显示在鼠标附近，写入目标仍取自 Word。
 5. 升级到 0.1.5 后，首次点击“插入 Word”时，如果 Word 请求访问 `insertion.docx`，请选择“允许访问”。以后插入会复用同一文件，包括重新启动 WordMath 以后。文件位于 `~/Library/Application Support/WordMath/Insertion/insertion.docx`，正常插入结束后内容即清空。手动删除该文件或重置 Word 的授权后，下次插入可能需要重新允许。
 
@@ -52,9 +50,12 @@ WordMath 在同一用户会话中只运行一个实例。再次双击应用或�
 | 输入“生成二阶矩阵的特征多项式，用一句中文说明符号含义”，按 Enter | 展示正文与公式的混排预览 |
 | 点选预览中的文字或数学符号，修改后点“应用” | 在本机修正当前预览 |
 | 点“继续修改”并补充要求，或选择“针对选区追问” | 将最新预览和要求交给当前模型更新 |
-| 在模型选择框中换一个模型 | 下一次生成或追问使用该模型；切换本身不发出请求 |
+| 在模型选择框中换一个模型 | 本次面板接下来的生成或追问使用该模型 |
+| 再次打开模型下拉框，点「将所选模型设为默认」 | 保存为以后每次打开面板时使用的模型。模型列表保留原有顺序 |
 | 按 ⌘Enter 或点“插入 Word” | 把当前预览写入 Word |
 | 按 Esc | 退出当前编辑或取消面板 |
+
+也可以打开模型设置，在「默认模型」中直接选择任一已配置且可用的模型。保存的选择在重新启动 WordMath 后仍然生效。
 
 生成前，输入框中的「模型名 · 服务名」表示本次请求的实际去向。收到服务的有效响应后，面板会显示 HTTP 状态，以及服务回传的模型名称和 token 用量（如有）。可用这行回执核对服务调用。API 账号的费用以服务商账单为准。ChatGPT 套餐的剩余额度可在 ChatGPT 的用量设置中查看。
 
