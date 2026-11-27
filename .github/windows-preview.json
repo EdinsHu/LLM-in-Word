@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0-rc.3",
+  "commit": "809ee12ca8e0330253c9fb7452fbbfd5e5349c95",
+  "run_id": 45984873666,
+  "artifact_id": 15190757485,
+  "sha256": "89fde3da64fb6aca751d19b6de0deebe5a8341596cca398f143f1167b26ca06a",
+  "macos": {
+    "run_id": 45984873685,
+    "artifact_id": 15190976856,
+    "sha256": "2649b39a87640d2a26713b82c8aac6c27cef614ea548a1fd7af7798e31dd1ba7"
+  }
+}

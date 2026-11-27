@@ -91,5 +91,94 @@
   $('repair').click();
   assert(calls('repair').length === 2, 'Changing model during a request must not enable a repair on the previous account.');
   assert(!calls('insert').length, 'Repair must never insert the preview into Word.');
+  const beforeLogin = calls('generate').length;
+  WordMath.start();
+  const picker = $('model');
+  assert(!picker.hidden && picker.options.length === 2, 'Account login must be reachable before any model is configured.');
+  picker.value = picker.options[picker.options.length - 1].value;
+  picker.dispatchEvent(new Event('change'));
+  assert(calls('chatGPTSettings').length === 1 && picker.value === '' &&
+    calls('generate').length === beforeLogin, 'Opening sign-in must not send a model request.');
+  const plan = { id: 'plan1', label: 'From account', usesChatGPTPlan: true };
+  const api = { id: 'api1', label: 'From API' };
+  WordMath.setModels([plan, api], 'plan1');
+  assert(picker.value === 'plan1' && !$('planUsage').hidden, 'Plan selection must show where usage is charged.');
+  $('manageUsage').click();
+  assert(calls('chatGPTUsage').length === 1, 'The plan usage link must reach the native host.');
+  WordMath.setModels([api], 'unavailable:plan1');
+  generate('保留原来的计费用途');
+  assert(!picker.value && calls('generate').length === beforeLogin,
+    'An unavailable plan must not send the prompt using a different account.');
+  picker.value = 'api1';
+  picker.dispatchEvent(new Event('change'));
+  generate('显式选择 API');
+  assert($('planUsage').hidden && calls('generate').at(-1).modelID === 'api1', 'An explicit account change should work.');
+
+  const options = [{ id: 'one/x', label: 'X · 服务一' }, { id: 'two/x', label: 'X · 服务二' }, plan];
+  function select(id) {
+    picker.value = id;
+    picker.dispatchEvent(new Event('change'));
+  }
+  const marked = () => Array.from(picker.options).filter(o => o.textContent.endsWith('（默认）')).map(o => o.value);
+  WordMath.start({ models: options, defaultModelID: 'one/x' });
+  $('prompt').value = '尚未完成的公式描述';
+  WordMath.setModels(options, 'two/x');
+  assert(picker.value === 'two/x' && $('prompt').value === '尚未完成的公式描述',
+    'Saving a new default must update the open panel even when the old model remains in the list.');
+  assert(marked().join() === 'two/x' && $('setDefaultModel').disabled, 'Only the persisted default should be marked.');
+  assert(Array.from(picker.options).slice(0, 3).map(o => o.value).join() === 'one/x,two/x,plan1',
+    'Setting a default must leave model order intact.');
+  select('one/x');
+  WordMath.setModels(options, 'two/x');
+  assert(picker.value === 'one/x' && !calls('setDefaultModel').length && !$('setDefaultModel').disabled,
+    'A normal refresh must preserve the current temporary choice without persisting it.');
+  const requests = calls('generate').length;
+  select($('setDefaultModel').value);
+  assert(calls('setDefaultModel').length === 1 && calls('setDefaultModel')[0].modelID === 'one/x' &&
+    picker.value === 'one/x' && marked().join() === 'two/x', 'Persist the account-qualified choice and wait for native confirmation.');
+  WordMath.defaultModelError('保存失败');
+  assert(picker.value === 'one/x' && marked().join() === 'two/x' && $('modelNotice').textContent === '保存失败',
+    'A failed settings write must retain the last saved default and the current choice.');
+  select($('setDefaultModel').value);
+  WordMath.setModels(options, 'one/x');
+  assert(marked().join() === 'one/x' && $('setDefaultModel').disabled && $('modelNotice').hidden && calls('generate').length === requests,
+    'A successful native save must mark the new default without issuing a model request.');
+
+  WordMath.start({ models: options, defaultModelID: 'one/x' });
+  assert(picker.value === 'one/x', 'A new panel must open on the saved default.');
+  select('plan1');
+  WordMath.setModels(options.slice(0, 2), 'one/x');
+  WordMath.setModels(options.slice(0, 2), 'one/x');
+  generate('先前的套餐模型不可用');
+  assert(!picker.value && calls('generate').length === requests, 'Repeated refreshes must not switch a missing plan choice to a paid API.');
+  WordMath.setModels(options, 'one/x');
+  assert(picker.value === 'plan1', 'An unchanged account choice should resume when its model catalog returns.');
+  WordMath.start({ models: options, defaultModelID: 'plan1' });
+  select('one/x');
+  WordMath.setModels(options.slice(0, 2), 'unavailable:plan1');
+  WordMath.setModels(options, 'plan1');
+  assert(picker.value === 'one/x', 'Reloading the same plan default must preserve an explicit temporary API selection.');
+
+  WordMath.start({ models: options, defaultModelID: 'one/x' });
+  WordMath.result(draft, html, true);
+  $('preview').querySelector('mi').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  editor.value = 'C';
+  select('two/x');
+  generate('使用新模型继续修改');
+  WordMath.formatError('保留此诊断');
+  WordMath.catalogError('后台套餐目录刷新失败');
+  assert(!$('repairBar').hidden && $('status').textContent === '保留此诊断' && $('modelNotice').hidden,
+    'A background catalog error must not clear another account’s pending repair.');
+  const repairs = calls('discardRepair').length;
+  select($('setDefaultModel').value);
+  WordMath.defaultModelError('存储暂不可用');
+  assert(!$('repairBar').hidden && $('status').textContent === '保留此诊断', 'Saving a default must not hide a pending repair diagnostic.');
+  WordMath.setModels(options, 'two/x');
+  assert(!$('repairBar').hidden && calls('discardRepair').length === repairs &&
+    $('prompt').value === '使用新模型继续修改' && $('preview').querySelector('mi').textContent === 'C',
+    'Pinning the already selected model must preserve the prompt, edited preview and same-model repair.');
+  WordMath.setModels(options, 'one/x');
+  assert($('repairBar').hidden && calls('discardRepair').length === repairs + 1 &&
+    $('preview').querySelector('mi').textContent === 'C', 'Changing the active model should release only the old repair.');
   return 'PASS';
 })();

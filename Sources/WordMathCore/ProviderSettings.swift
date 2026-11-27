@@ -4,6 +4,7 @@ import Security
 public enum ProviderKind: String, Codable, CaseIterable, Hashable {
     case openAICompatible
     case anthropic
+    case chatGPT
 }
 
 public struct ProviderAccount: Codable, Identifiable, Equatable {
@@ -13,6 +14,18 @@ public struct ProviderAccount: Codable, Identifiable, Equatable {
     public var baseURL: String
     public var manualModels: [String]
     public var discoveredModels: [String]
+
+    /// Optional fields keep existing API-key settings decodable.
+    public var registrationID: String?
+    public var modelLabels: [String: String]?
+
+    public static func chatGPT(registrationID: String, replacing previous: ProviderAccount? = nil) -> ProviderAccount {
+        let id = previous.flatMap { $0.registrationID == registrationID ? $0.id : nil } ?? UUID()
+        var account = ProviderAccount(id: id,
+            name: "ChatGPT 套餐", kind: .chatGPT, baseURL: "https://api.openai.com/v1")
+        account.registrationID = registrationID
+        return account
+    }
 
     public init(id: UUID = UUID(), name: String, kind: ProviderKind, baseURL: String,
                 manualModels: [String] = [], discoveredModels: [String] = []) {
@@ -27,7 +40,7 @@ public struct ProviderAccount: Codable, Identifiable, Equatable {
     /// Keep the user's manual model ordering for the initial default.
     public var availableModels: [String] {
         var seen = Set<String>()
-        return (manualModels + discoveredModels)
+        return (kind == .chatGPT ? discoveredModels : manualModels + discoveredModels)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
@@ -134,7 +147,11 @@ public final class ProviderSettings {
         }
 
         mutating func reconcileDefault() {
-            if let defaultModel, includes(defaultModel) { return }
+            if let defaultModel, let account = accounts.first(where: { $0.id == defaultModel.accountID }),
+               account.kind == .chatGPT || account.availableModels.contains(defaultModel.modelID) {
+                // A temporarily missing plan model must still require an explicit billing choice.
+                return
+            }
             defaultModel = accounts.lazy.compactMap { account in
                 account.availableModels.first.map { ModelChoice(accountID: account.id, modelID: $0) }
             }.first
@@ -173,6 +190,23 @@ public final class ProviderSettings {
 
     /// A nil key retains the bound credential. An empty key removes it.
     public func save(account: ProviderAccount, apiKey: String? = nil) throws {
+        if account.kind == .chatGPT {
+            guard apiKey == nil, account.registrationID?.isEmpty == false else { throw ProviderError.invalidModel }
+            try update { state in
+                let previous = state.accounts.first { $0.kind == .chatGPT }
+                let wasPlanDefault = previous != nil && state.defaultModel?.accountID == previous?.id
+                state.accounts.removeAll { $0.kind == .chatGPT && $0.id != account.id }
+                if let index = state.accounts.firstIndex(where: { $0.id == account.id }) {
+                    state.accounts[index] = account
+                } else { state.accounts.append(account) }
+                if wasPlanDefault, let previousChoice = state.defaultModel {
+                    // Keep an unavailable plan default in that billing path. The picker asks
+                    // for an explicit choice if the new catalog doesn't contain the old slug.
+                    state.defaultModel = ModelChoice(accountID: account.id, modelID: previousChoice.modelID)
+                } else { state.reconcileDefault() }
+            }
+            return
+        }
         let endpoint = try account.validatedURL()
         guard !account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ProviderError.emptyAccountName
@@ -198,7 +232,7 @@ public final class ProviderSettings {
 
     public func remove(id: UUID) throws {
         try update { state in
-            try credentials.put(nil, for: id)
+            if state.accounts.first(where: { $0.id == id })?.kind != .chatGPT { try credentials.put(nil, for: id) }
             state.accounts.removeAll { $0.id == id }
             state.reconcileDefault()
         }

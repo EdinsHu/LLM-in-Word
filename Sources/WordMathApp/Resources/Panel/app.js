@@ -11,7 +11,18 @@
     draft: null, originalPrompt: '', mode: 'revision',
     activeNode: null, scopePath: null, pending: null, busy: false, isExample: false
   };
-  const post = message => window.webkit.messageHandlers.wordmath.postMessage(message);
+  const windowsHost = window.chrome?.webview;
+  const post = windowsHost
+    ? message => windowsHost.postMessage(message)
+    : message => window.webkit.messageHandlers.wordmath.postMessage(message);
+  const insertModifier = event => windowsHost ? event.ctrlKey : event.metaKey;
+  if (windowsHost) byID('insert').querySelector('kbd').textContent = 'Ctrl+↵';
+  const accountSettingsOption = '__wordmath_chatgpt_settings__';
+  const setDefaultOption = '__wordmath_set_default__';
+  let savedDefaultID = '';
+  let temporaryChoice = null;
+  let selectedModel = '';
+  let modelCount = 0;
   let lastHeight = 0;
   let composing = false;
   let compositionEndedAt = -Infinity;
@@ -40,16 +51,19 @@
 
   function controls() {
     const hasDraft = !!state.draft;
-    const hasModels = model.options.length > 0;
+    const hasModels = modelCount > 0;
     byID('setupHint').hidden = hasModels || hasDraft;
     byID('example').disabled = state.busy;
+    if (windowsHost) byID('settings').disabled = state.busy;
     byID('previewHint').textContent = state.isExample ? '离线排版示例 · 点选文字或符号可编辑' : '点选文字或符号可编辑';
-    model.hidden = !hasModels;
+    byID('planUsage').hidden = model.selectedOptions[0]?.dataset.plan !== 'true';
     byID('modeBar').hidden = byID('previewArea').hidden = !hasDraft;
     byID('generate').textContent = hasModels ? (hasDraft ? '更新预览' : '生成') : '配置服务';
-    byID('generate').disabled = state.busy || (hasModels && !prompt.value.trim());
+    byID('generate').disabled = state.busy || (hasModels && (!selectedModel || !prompt.value.trim()));
     byID('insert').disabled = !hasDraft || state.busy;
     model.disabled = prompt.disabled = state.busy;
+    const setDefault = byID('setDefaultModel');
+    if (setDefault) setDefault.disabled = !selectedModel || selectedModel === savedDefaultID;
     byID('revisionMode').disabled = byID('replaceMode').disabled = state.busy;
     byID('revisionMode').setAttribute('aria-pressed', String(state.mode === 'revision'));
     byID('replaceMode').setAttribute('aria-pressed', String(state.mode === 'replace'));
@@ -63,19 +77,60 @@
     resizePanel();
   }
 
+  function defaultModelError(message = '') {
+    const line = byID('modelNotice');
+    line.textContent = message;
+    line.hidden = !message;
+  }
+
+  function catalogError(message) {
+    if (!selectedModel) defaultModelError(message);
+  }
+
   function setModels(models, preferredID) {
-    const previous = model.value;
+    const previous = selectedModel;
+    const entries = models || [];
+    const preferred = preferredID || '';
+    const unavailable = preferred.startsWith('unavailable:');
+    const nextDefaultID = unavailable ? preferred.slice('unavailable:'.length) : preferred;
+    if (savedDefaultID !== nextDefaultID) {
+      temporaryChoice = null;
+      defaultModelError();
+    }
+    savedDefaultID = nextDefaultID;
+
+    // Keep a temporary plan selection through catalog reloads. Until it returns,
+    // the user chooses whether to send their next request to another account.
+    const present = id => entries.some(entry => entry.id === id);
+    if (temporaryChoice && !temporaryChoice.usesPlan && !present(temporaryChoice.id)) temporaryChoice = null;
+    const wanted = temporaryChoice?.id ?? (unavailable ? '' : savedDefaultID || entries[0]?.id);
+    selectedModel = wanted && present(wanted) ? wanted : '';
+
     model.replaceChildren();
-    for (const entry of models || []) {
-      const option = document.createElement('option');
-      option.value = entry.id;
-      option.textContent = entry.label;
+    for (const entry of entries) {
+      const label = !unavailable && entry.id === savedDefaultID ? entry.label + '（默认）' : entry.label;
+      const option = new Option(label, entry.id);
+      option.dataset.plan = String(entry.usesChatGPTPlan === true);
       model.append(option);
     }
-    const ids = Array.from(model.options, entry => entry.value);
-    const selected = [previous, preferredID, ids[0]].find(value => ids.includes(value));
-    if (selected !== undefined) model.value = selected;
-    if (model.value !== previous) discardRepair();
+    modelCount = entries.length;
+    if (!selectedModel) {
+      const placeholder = new Option(temporaryChoice || preferred ? '请重新选择模型' : '选择模型', '');
+      placeholder.disabled = true;
+      model.prepend(placeholder);
+    }
+    if (modelCount) {
+      const setDefault = new Option('将所选模型设为默认', setDefaultOption);
+      setDefault.id = 'setDefaultModel';
+      model.append(setDefault);
+    }
+    const accountLabel = entries.some(entry => entry.usesChatGPTPlan) ? '管理 ChatGPT 账号…' : '使用 ChatGPT 登录…';
+    model.append(new Option(accountLabel, accountSettingsOption));
+    model.value = selectedModel;
+    if (selectedModel !== previous) {
+      defaultModelError();
+      discardRepair();
+    }
     controls();
   }
 
@@ -89,6 +144,10 @@
   function start(config = {}) {
     Object.assign(state, { draft: null, originalPrompt: '', mode: 'revision',
       activeNode: null, scopePath: null, pending: null, busy: false, isExample: false });
+    savedDefaultID = '';
+    temporaryChoice = null;
+    selectedModel = '';
+    defaultModelError();
     model.replaceChildren();
     preview.replaceChildren();
     preview.style.removeProperty('--word-font-family');
@@ -300,7 +359,8 @@
 
   function generate() {
     if (state.busy) return;
-    if (!model.options.length) { post({ action: 'settings' }); return; }
+    if (!modelCount) { post({ action: 'settings' }); return; }
+    if (!selectedModel || selectedModel !== model.value) { model.focus(); return; }
     const input = prompt.value.trim();
     if (!input || !applyEdit()) return;
     const isRevision = !!state.draft && state.mode === 'revision';
@@ -345,7 +405,28 @@
   for (const input of [prompt, editValue]) {
     input.addEventListener('input', () => { discardRepair(); controls(); });
   }
-  model.addEventListener('change', () => { discardRepair(); controls(); });
+  model.addEventListener('change', () => {
+    if (model.value === accountSettingsOption) {
+      model.value = selectedModel;
+      post({ action: 'chatGPTSettings' });
+      return;
+    }
+    defaultModelError();
+    if (model.value === setDefaultOption) {
+      model.value = selectedModel;
+      if (!state.busy && selectedModel && selectedModel !== savedDefaultID) {
+        post({ action: 'setDefaultModel', modelID: selectedModel });
+      }
+      return;
+    }
+    if (selectedModel === model.value) return;
+    selectedModel = model.value;
+    temporaryChoice = selectedModel === savedDefaultID ? null
+      : { id: selectedModel, usesPlan: model.selectedOptions[0]?.dataset.plan === 'true' };
+    discardRepair();
+    controls();
+  });
+  byID('manageUsage').addEventListener('click', () => post({ action: 'chatGPTUsage' }));
   byID('repair').addEventListener('click', repair);
   byID('settings').addEventListener('click', () => post({ action: 'settings' }));
   byID('example').addEventListener('click', () => {
@@ -365,7 +446,7 @@
   preview.addEventListener('click', event => activate(event.target.closest('[data-path]'), true));
 
   preview.addEventListener('keydown', event => {
-    if (event.metaKey || state.busy) return;
+    if (insertModifier(event) || state.busy) return;
     const leaves = Array.from(preview.querySelectorAll('[data-edit]'));
     if (!leaves.length) return;
     const current = leaves.indexOf(preview.querySelector('.selected'));
@@ -382,7 +463,7 @@
 
   document.addEventListener('keydown', event => {
     if (event.isComposing || event.keyCode === 229 || finishingComposition()) return;
-    if (event.metaKey && event.key === 'Enter') { event.preventDefault(); insert(); }
+    if (insertModifier(event) && event.key === 'Enter') { event.preventDefault(); insert(); }
     else if (event.key === 'Escape') {
       event.preventDefault();
       if (state.activeNode && document.activeElement === editValue) {
@@ -393,5 +474,5 @@
     }
   });
   new ResizeObserver(resizePanel).observe(panel);
-  window.WordMath = Object.freeze({ start, result, error, formatError, receipt, busy, setModels });
+  window.WordMath = Object.freeze({ start, result, error, formatError, receipt, busy, setModels, defaultModelError, catalogError });
 })();

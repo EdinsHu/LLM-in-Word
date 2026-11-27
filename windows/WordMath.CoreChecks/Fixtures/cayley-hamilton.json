@@ -1,0 +1,11 @@
+{"blocks":[
+  {"type":"paragraph","inlines":[{"text":"设 "},{"math":{"symbol":"A"}},{"text":" 是域上的 "},{"math":{"symbol":"n"}},{"text":" 阶方阵。把特征多项式写为"}]},
+  {"type":"equation","math":{"row":[{"symbol":"p"},{"delimit":{"left":"(","right":")","body":{"symbol":"t"}}},{"op":"="},{"sum":[{"row":[{"symbol":"j"},{"op":"="},{"number":"0"}]},{"symbol":"n"},{"row":[{"sub":[{"symbol":"c"},{"symbol":"j"}]},{"sup":[{"symbol":"t"},{"symbol":"j"}]}]}]}]}},
+  {"type":"paragraph","inlines":[{"text":"令 "},{"math":{"symbol":"B"}},{"text":" 为 "},{"math":{"row":[{"symbol":"t"},{"symbol":"I"},{"op":"−"},{"symbol":"A"}]}},{"text":" 的伴随矩阵多项式，其次数至多为 "},{"math":{"row":[{"symbol":"n"},{"op":"−"},{"number":"1"}]}},{"text":"。记 "},{"math":{"sub":[{"symbol":"B"},{"symbol":"j"}]}},{"text":" 为它的 "},{"math":{"symbol":"j"}},{"text":" 次项系数，并将范围以外的系数定义为零。由伴随矩阵恒等式，"}]},
+  {"type":"equation","math":{"row":[{"delimit":{"left":"(","right":")","body":{"row":[{"symbol":"t"},{"symbol":"I"},{"op":"−"},{"symbol":"A"}]}}},{"symbol":"B"},{"delimit":{"left":"(","right":")","body":{"symbol":"t"}}},{"op":"="},{"symbol":"p"},{"delimit":{"left":"(","right":")","body":{"symbol":"t"}}},{"symbol":"I"}]}},
+  {"type":"paragraph","inlines":[{"text":"比较双方的各次幂系数，得到"}]},
+  {"type":"equation","math":{"row":[{"sub":[{"symbol":"B"},{"row":[{"symbol":"j"},{"op":"−"},{"number":"1"}]}]},{"op":"−"},{"symbol":"A"},{"sub":[{"symbol":"B"},{"symbol":"j"}]},{"op":"="},{"sub":[{"symbol":"c"},{"symbol":"j"}]},{"symbol":"I"}]}},
+  {"type":"paragraph","inlines":[{"text":"将每一式左乘 "},{"math":{"sup":[{"symbol":"A"},{"symbol":"j"}]}},{"text":"，再对 "},{"math":{"symbol":"j"}},{"text":" 从零至 "},{"math":{"symbol":"n"}},{"text":" 求和。左边相邻两项逐项抵消，端点系数也为零，于是"}]},
+  {"type":"equation","math":{"row":[{"symbol":"p"},{"delimit":{"left":"(","right":")","body":{"symbol":"A"}}},{"op":"="},{"sum":[{"row":[{"symbol":"j"},{"op":"="},{"number":"0"}]},{"symbol":"n"},{"row":[{"sub":[{"symbol":"c"},{"symbol":"j"}]},{"sup":[{"symbol":"A"},{"symbol":"j"}]}]}]},{"op":"="},{"number":"0"}]}},
+  {"type":"paragraph","inlines":[{"text":"因此任意方阵均满足自己的特征方程。"}]}
+]}

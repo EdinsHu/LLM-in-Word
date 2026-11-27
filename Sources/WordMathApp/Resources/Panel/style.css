@@ -57,8 +57,8 @@ select {
 .mode-options [aria-pressed="true"] { color: var(--ink); background: var(--soft); }
 #scope { min-width: 0; display: flex; align-items: center; color: var(--accent); font-size: 12px; }
 #scopeLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#setupHint, #status, #receipt { margin: 8px 2px 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-#status.error { color: var(--error); }
+#setupHint, #status, #receipt, #modelNotice { margin: 8px 2px 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#status.error, #modelNotice { color: var(--error); }
 #repairBar { display: flex; align-items: center; gap: 7px; margin-top: 5px; color: var(--muted); font-size: 12px; }
 #repair { background: var(--soft); color: var(--accent); font-weight: 600; }
 #example { padding: 0 2px; color: var(--accent); font-size: inherit; text-decoration: underline; }
@@ -86,3 +86,6 @@ select {
 #editBar button, footer button { font-size: 12px; }
 footer span { margin-right: auto; }
 kbd { opacity: .8; margin-left: 2px; }
+
+#planUsage { margin: 5px 0 0 16px; font-size: 12px; color: var(--muted); }
+#manageUsage { padding: 0; color: var(--accent); }

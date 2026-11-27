@@ -2,10 +2,15 @@ name: Test and package WordMath for Mac
 
 on:
   push:
-    branches: [main]
+    branches: [main, windows-port]
     paths:
-      - Packaging/Info.plist
-      - .github/workflows/macos-package.yml
+      - 'Package.swift'
+      - 'Packaging/**'
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'scripts/**'
+      - 'windows/**'
+      - '.github/workflows/*-package.yml'
   workflow_dispatch:
 
 permissions:
@@ -29,7 +34,8 @@ jobs:
           app=dist/WordMath.app
           lipo "$app/Contents/MacOS/WordMath" -verify_arch arm64
           codesign --verify --strict "$app"
-          version="$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")"
+          version="$(plutil -extract WordMathReleaseVersion raw "$app/Contents/Info.plist" 2>/dev/null || plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")"
+          test "${version%%-*}" = "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")"
           archive="dist/WordMath-${version}-macOS-arm64.zip"
           ditto -c -k --norsrc --noextattr --keepParent "$app" "$archive"
           unzip -tq "$archive"
