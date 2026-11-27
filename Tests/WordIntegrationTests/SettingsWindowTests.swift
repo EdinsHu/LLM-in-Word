@@ -19,6 +19,42 @@ struct SettingsWindowTests {
         return (settings, window)
     }
 
+    @Test func globalDefaultIsImmediateAndIndependentOfTheAccountBeingEdited() throws {
+        let settings = try emptyProviderSettings()
+        let first = ProviderAccount(name: "first", kind: .openAICompatible,
+                                    baseURL: "https://first.example", manualModels: ["shared", "other"])
+        let second = ProviderAccount(name: "second", kind: .openAICompatible,
+                                     baseURL: "https://second.example", manualModels: ["shared", "family/model"])
+        try settings.save(account: first)
+        try settings.save(account: second)
+        var notifications = 0
+        let form = AccountForm(settings: settings, client: ProviderClient(), onDefaultChange: { notifications += 1 },
+                               onChange: {})
+        #expect(form.defaultOptions.map(\.label) == ["shared · first", "other · first", "shared · second", "family/model · second"])
+        form.manual += ", unsaved"
+        let selected = ModelChoice(accountID: second.id, modelID: "shared")
+        form.chooseDefault(selected)
+        #expect(notifications == 1)
+        #expect(form.draft.id == first.id)
+        #expect(form.manual.hasSuffix("unsaved"))
+        #expect(settings.defaultModel == selected)
+        #expect(settings.accounts == [first, second])
+        form.save()
+        #expect(settings.accounts[0].manualModels.last == "unsaved")
+        #expect(settings.defaultModel == selected)
+        // A model pinned from the input panel appears when returning to the settings window.
+        let panelChoice = ModelChoice(accountID: second.id, modelID: "family/model")
+        try settings.setDefault(panelChoice)
+        form.reloadSettings()
+        #expect(form.defaultChoice == panelChoice)
+        let reopened = AccountForm(settings: settings, client: ProviderClient(), onDefaultChange: {}, onChange: {})
+        #expect(reopened.defaultChoice == panelChoice)
+        form.chooseDefault(ModelChoice(accountID: second.id, modelID: "removed"))
+        #expect(form.isError)
+        #expect(settings.defaultModel == panelChoice)
+        #expect(notifications == 1)
+    }
+
     @Test func idleReopenNeverCreatesASettingsWindow() throws {
         let app = NSApplication.shared
         let providers = try emptyProviderSettings()

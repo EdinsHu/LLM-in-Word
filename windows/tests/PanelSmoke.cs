@@ -37,6 +37,7 @@ internal static class PanelSmoke
                 {
                     panel.Show();
                     await ExerciseAsync(panel, target).WaitAsync(TimeSpan.FromSeconds(75));
+                    await ExerciseDefaultsAsync(Path.Combine(temporaryDirectory, "default-choice")).WaitAsync(TimeSpan.FromSeconds(50));
                     await ExerciseConversationAsync(temporaryDirectory).WaitAsync(TimeSpan.FromSeconds(50));
                 }
                 catch (Exception error)
@@ -54,7 +55,7 @@ internal static class PanelSmoke
             Application.Run(loop);
             if (failure != null)
                 throw new InvalidOperationException("Windows panel self-test failed", failure);
-            Console.WriteLine("PASS: WebView2 ChatGPT sign-in picker and settings, preview/edit/insert, model generation, block repair and selected follow-up.");
+            Console.WriteLine("PASS: WebView2 default selection and persistence, ChatGPT sign-in picker and settings, preview/edit/insert, model generation, block repair and selected follow-up.");
             return 0;
         }
         finally
@@ -135,7 +136,8 @@ internal static class PanelSmoke
             throw new InvalidOperationException("Inserted XML lost the edited paragraph text or editable math.");
     }
 
-    private static async Task CloseSettingsAsync(PanelForm panel, bool checkChatLogin)
+    private static async Task CloseSettingsAsync(PanelForm panel, bool checkChatLogin,
+        Action<ModelSettingsForm>? change = null, string expectedPage = "!document.getElementById('previewArea').hidden")
     {
         var clock = Stopwatch.StartNew();
         ModelSettingsForm? settings;
@@ -154,6 +156,7 @@ internal static class PanelSmoke
                 !login.Visible || !login.Enabled)
                 throw new InvalidOperationException("The model picker did not expose an actionable ChatGPT sign-in.");
         }
+        change?.Invoke(settings);
         settings.CancelButton!.PerformClick();
         // ShowDialog has its own nested message loop. Yielding directly can resume
         // before it unwinds; wait for actual visibility and owner interactivity.
@@ -164,7 +167,66 @@ internal static class PanelSmoke
                 throw new InvalidOperationException("Closing Settings left a visible dialog or disabled the input panel.");
             await Task.Delay(75);
         }
-        await WaitForPageAsync(panel, "!document.getElementById('previewArea').hidden", "preserved draft after closing Settings");
+        await WaitForPageAsync(panel, expectedPage, "preserved state after closing Settings");
+    }
+
+    private static async Task ExerciseDefaultsAsync(string directory)
+    {
+        var service = new ModelService(directory);
+        var first = service.Prepare(Guid.NewGuid(), "保存的服务 A", ModelProtocol.OpenAI, "https://a.invalid/v1", ["shared", "second"], "");
+        var other = service.Prepare(Guid.NewGuid(), "保存的服务 B", ModelProtocol.OpenAI, "https://b.invalid/v1", ["shared"], "");
+        service.Save(first, "shared");
+        service.Save(other, null);
+        string otherID = JsonSerializer.Serialize(other.ChoiceId("shared"));
+        string firstSecondID = JsonSerializer.Serialize(first.ChoiceId("second"));
+        string[] order = service.Models.Select(choice => choice.Id).ToArray();
+        using (var panel = new PanelForm(service, new CaptureTarget()))
+        {
+            panel.Show();
+            await panel.Ready;
+            await panel.Browser.ExecuteScriptAsync($$"""
+                document.getElementById('prompt').value = '保留这个矩阵描述';
+                document.getElementById('prompt').dispatchEvent(new Event('input'));
+                const picker = document.getElementById('model');
+                picker.value = {{otherID}};
+                picker.dispatchEvent(new Event('change'));
+                """);
+            if (new ModelService(directory).DefaultModelID != first.ChoiceId("shared"))
+                throw new InvalidOperationException("A temporary model switch changed the default.");
+            await panel.Browser.ExecuteScriptAsync("""
+                (() => {
+                    const picker = document.getElementById('model');
+                    const action = document.getElementById('setDefaultModel');
+                    if (!action || action.disabled) throw new Error('The set-default action is unavailable.');
+                    picker.value = action.value;
+                    picker.dispatchEvent(new Event('change'));
+                })()
+                """);
+            await WaitForPageAsync(panel, $"document.getElementById('model').value === {otherID} && document.getElementById('model').selectedOptions[0].text.includes('默认')",
+                "visible cross-service default mark");
+            var saved = new ModelService(directory);
+            if (saved.DefaultModelID != other.ChoiceId("shared") || !saved.Models.Select(m => m.Id).SequenceEqual(order))
+                throw new InvalidOperationException("The panel pin was not persisted, or it reordered the saved choices.");
+
+            await panel.Browser.ExecuteScriptAsync("setTimeout(() => document.getElementById('settings').click(), 50)");
+            await CloseSettingsAsync(panel, false, settings =>
+            {
+                var picker = settings.Controls.Find("defaultModelPicker", true).OfType<ComboBox>().Single();
+                if (!picker.Visible || !picker.Enabled || (picker.SelectedItem as ModelChoice)?.Id != other.ChoiceId("shared"))
+                    throw new InvalidOperationException("Settings did not display the active global default.");
+                picker.SelectedItem = picker.Items.OfType<ModelChoice>().Single(m => m.Id == first.ChoiceId("second"));
+            }, $"document.getElementById('model').value === {firstSecondID} && document.getElementById('prompt').value === '保留这个矩阵描述'");
+            panel.Close();
+        }
+        var restarted = new ModelService(directory);
+        if (!restarted.Models.Select(m => m.Id).SequenceEqual(order))
+            throw new InvalidOperationException("Changing defaults removed or reordered existing models.");
+        using var reopened = new PanelForm(restarted, new CaptureTarget());
+        reopened.Show();
+        await reopened.Ready;
+        await WaitForPageAsync(reopened, $"document.getElementById('model').value === {firstSecondID} && document.getElementById('setDefaultModel').disabled",
+            "saved default selected on reopening");
+        reopened.Close();
     }
 
     private static async Task ExerciseConversationAsync(string directory)
@@ -199,6 +261,9 @@ internal static class PanelSmoke
         await WaitForPageAsync(panel, "!document.getElementById('repairBar').hidden", "explicit repair offer");
         if (prompts.Count != 1 || prompts[0] != initial || target.Xml.Task.IsCompleted)
             throw new InvalidOperationException("Invalid content was auto-repaired, prematurely inserted or the prompt changed.");
+
+        await panel.Browser.ExecuteScriptAsync("setTimeout(() => document.getElementById('settings').click(), 50)");
+        await CloseSettingsAsync(panel, false, expectedPage: "!document.getElementById('repairBar').hidden");
 
         await panel.Browser.ExecuteScriptAsync("document.getElementById('repair').click()");
         await WaitForPageAsync(panel, """

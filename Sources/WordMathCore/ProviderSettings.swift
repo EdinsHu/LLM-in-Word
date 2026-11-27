@@ -147,7 +147,11 @@ public final class ProviderSettings {
         }
 
         mutating func reconcileDefault() {
-            if let defaultModel, includes(defaultModel) { return }
+            if let defaultModel, let account = accounts.first(where: { $0.id == defaultModel.accountID }),
+               account.kind == .chatGPT || account.availableModels.contains(defaultModel.modelID) {
+                // A temporarily missing plan model must still require an explicit billing choice.
+                return
+            }
             defaultModel = accounts.lazy.compactMap { account in
                 account.availableModels.first.map { ModelChoice(accountID: account.id, modelID: $0) }
             }.first

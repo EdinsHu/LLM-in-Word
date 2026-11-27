@@ -57,6 +57,27 @@ public sealed partial class ModelService
             Require(!Encoding.UTF8.GetString(File.ReadAllBytes(path)).Contains(key, StringComparison.Ordinal), "设置文件写入了明文密钥");
             service = new ModelService(path, client);
             Require(service.Accounts.First().Key == key && service.DefaultModelID == first, "DPAPI 设置未能恢复");
+            var otherID = claude.ChoiceId("test-model");
+            var order = service.Models.Select(m => m.Id).ToArray();
+            service.SetDefaultModel(otherID);
+            service.Save(deepSeek with { Name = "服务 A 改名" }, null);
+            service = new ModelService(path, client);
+            Require(service.DefaultModelID == otherID && service.Models.Select(m => m.Id).SequenceEqual(order),
+                "重启或编辑其他服务不应改变默认模型或模型顺序");
+            foreach (string unavailable in new[] { "", "unknown", "chatgpt/signed-out/model", "unavailable:chatgpt/signed-out/model" })
+            {
+                try { service.SetDefaultModel(unavailable); }
+                catch (InvalidOperationException) { continue; }
+                throw new InvalidOperationException("不应将失效或未登录的模型设为默认");
+            }
+            Require(new ModelService(path, client).DefaultModelID == otherID, "无效选项改变了已保存的默认模型");
+            // A previously authorized but signed-out plan must never silently turn into a paid API call.
+            const string savedPlan = "chatgpt/previous-login/model";
+            service.storage.Write(service.config with { DefaultID = savedPlan });
+            service = new ModelService(path, client);
+            service.Save(deepSeek, null);
+            Require(service.DefaultModelID == "unavailable:" + savedPlan, "失效的套餐默认项被其他服务覆盖");
+            service.SetDefaultModel(first);
             bool rejected = false;
             try { service.Prepare(deepSeek.Id, "服务 A", ModelProtocol.OpenAI, "https://different.invalid", [], null); }
             catch (ArgumentException) { rejected = true; }

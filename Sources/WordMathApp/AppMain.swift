@@ -111,7 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showSettings(returningTo panel: InputPanel?, chatGPT: Bool = false) {
-        let window = preferences ?? SettingsWindow(settings: settings, client: client) { [weak self] in
+        let window = preferences ?? SettingsWindow(settings: settings, client: client, onDefaultChange: { [weak self] in
+            self?.input?.applyModels()
+        }) { [weak self] in
             self?.input?.refreshModels()
         }
         preferences = window

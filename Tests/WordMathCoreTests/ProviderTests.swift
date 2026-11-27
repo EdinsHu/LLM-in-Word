@@ -69,6 +69,28 @@ struct ProviderTests {
         #expect(try vault.token(for: first) == "other-key")
     }
 
+    @Test func unrelatedAPIChangesPreserveAnUnavailablePlanDefault() throws {
+        let suite = "WordMath.tests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let vault = MemoryCredentials()
+        let settings = ProviderSettings(defaults: defaults, credentials: vault)
+        try settings.save(account: account)
+        var plan = ProviderAccount.chatGPT(registrationID: "account")
+        plan.discoveredModels = ["plan-model"]
+        try settings.save(account: plan)
+        let selected = ModelChoice(accountID: plan.id, modelID: "plan-model")
+        try settings.setDefault(selected)
+        plan.discoveredModels = []
+        try settings.save(account: plan)
+        let other = ProviderAccount(name: "other", kind: .openAICompatible,
+                                    baseURL: "https://other.example", manualModels: ["third"])
+        try settings.save(account: other)
+        #expect(settings.defaultModel == selected)
+        try settings.remove(id: other.id)
+        #expect(ProviderSettings(defaults: defaults, credentials: vault).defaultModel == selected)
+    }
+
     @Test func transportConventionsAndEditedPreview() async throws {
         let vault = MemoryCredentials()
         try vault.put(ProviderCredential(endpoint: account.validatedURL(), kind: .openAICompatible, token: "sample-key"),

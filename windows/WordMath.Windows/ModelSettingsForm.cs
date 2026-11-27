@@ -34,17 +34,15 @@ public sealed class ModelSettingsForm : Form
     private readonly CancellationTokenSource lifetime = new();
     private readonly Label accountStatus = new() { AutoSize = true, MaximumSize = new Size(510, 0) };
     private readonly Label chatFeedback = new() { AutoSize = true, MaximumSize = new Size(510, 0) };
-    private readonly ComboBox chatModels = DropDown();
     private readonly Button chatLogin = new() { Name = "chatGPTLogin", AutoSize = true };
     private readonly Button differentAccount = new() { Text = "使用其他账号", AutoSize = true };
     private readonly Button chatRefresh = new() { Text = "刷新模型", AutoSize = true };
     private readonly Button chatSignOut = new() { Text = "退出 ChatGPT", AutoSize = true };
-    private readonly Button chatDefault = new() { Text = "设为默认模型", AutoSize = true };
     private bool chatBusy;
     private Guid activeID;
     private bool filling;
     private long revision;
-    private const string KeepDefault = "沿用当前默认模型";
+    private bool updatingPreferred;
     private static ComboBox DropDown() => new() { DropDownStyle = ComboBoxStyle.DropDownList };
 
     public ModelSettingsForm(ModelService service, bool showChatGpt = false)
@@ -54,7 +52,7 @@ public sealed class ModelSettingsForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         StartPosition = FormStartPosition.CenterScreen;
         MinimizeBox = false;
-        ClientSize = new Size(600, 525);
+        ClientSize = new Size(600, 555);
         MinimumSize = new Size(455, 410);
 
         var body = new TableLayoutPanel {
@@ -73,6 +71,32 @@ public sealed class ModelSettingsForm : Form
         tabs.SelectedTab = showChatGpt || service.ChatGpt.IsConnected || service.Accounts.Count == 0 ? chatTab : apiTab;
         Controls.Add(tabs);
 
+        var defaultRow = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true,
+            ColumnCount = 2, RowCount = 1, Padding = new Padding(10, 6, 10, 6) };
+        defaultRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        defaultRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        defaultRow.Controls.Add(new Label { Text = "默认模型", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
+        preferred.Name = "defaultModelPicker";
+        preferred.AccessibleName = "默认模型";
+        preferred.DisplayMember = nameof(ModelChoice.Label);
+        preferred.Dock = DockStyle.Fill;
+        defaultRow.Controls.Add(preferred, 1, 0);
+        Controls.Add(defaultRow);
+        preferred.SelectedIndexChanged += (_, _) =>
+        {
+            if (updatingPreferred || preferred.SelectedItem is not ModelChoice { Id.Length: > 0 } selected) return;
+            try
+            {
+                service.SetDefaultModel(selected.Id);
+                RefreshDefault();
+            }
+            catch (Exception error)
+            {
+                RefreshDefault();
+                MessageBox.Show(this, error.Message, "默认模型", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+
         var chat = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false,
             AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(15) };
         chatTab.Controls.Add(chat);
@@ -80,11 +104,9 @@ public sealed class ModelSettingsForm : Form
         var signInRow = new FlowLayoutPanel { AutoSize = true };
         signInRow.Controls.AddRange([chatLogin, differentAccount, chatSignOut]);
         chat.Controls.Add(signInRow);
-        chatModels.Width = 320;
-        chat.Controls.Add(chatModels);
         var chatActions = new FlowLayoutPanel { AutoSize = true };
         var usage = new LinkLabel { Text = "管理 ChatGPT 用量", AutoSize = true, Anchor = AnchorStyles.Left };
-        chatActions.Controls.AddRange([chatRefresh, chatDefault, usage]);
+        chatActions.Controls.AddRange([chatRefresh, usage]);
         chat.Controls.Add(chatActions);
         chat.Controls.Add(chatFeedback);
 
@@ -100,12 +122,6 @@ public sealed class ModelSettingsForm : Form
         });
         chatRefresh.Click += async (_, _) => await ChatAction(() => service.RefreshChatModelsAsync(lifetime.Token, resumeUsage: true));
         chatSignOut.Click += async (_, _) => await ChatAction(() => service.DisconnectChatAsync(lifetime.Token));
-        chatDefault.Click += (_, _) =>
-        {
-            if (chatModels.SelectedItem is not ChatGptModel model) return;
-            try { service.SelectChatDefault(model); chatFeedback.Text = "默认模型已保存。"; }
-            catch (Exception error) { chatFeedback.Text = error.Message; }
-        };
         usage.LinkClicked += (_, _) => { try { OpenChatUsage(); } catch { chatFeedback.Text = ChatGptProvider.UsageUrl; } };
         bool catalogRequested = false;
         async Task RefreshVisibleTab()
@@ -148,7 +164,6 @@ public sealed class ModelSettingsForm : Form
         var actions = new FlowLayoutPanel { AutoSize = true };
         actions.Controls.Add(fetch);
         Field("", actions);
-        Field("默认模型", preferred);
         Field("", feedback);
         var buttons = new FlowLayoutPanel { AutoSize = true };
         var close = new Button { Text = "关闭", AutoSize = true, DialogResult = DialogResult.Cancel };
@@ -166,7 +181,6 @@ public sealed class ModelSettingsForm : Form
             if (!filling && accounts.SelectedItem is ModelAccount account) ShowAccount(account);
         };
         add.Click += (_, _) => NewAccount();
-        models.TextChanged += (_, _) => { if (!filling) RefreshDefault(); };
         foreach (var field in new[] { nameInput, address, key, models })
             field.TextChanged += (_, _) => revision++;
         clearKey.CheckedChanged += (_, _) => { key.Enabled = !clearKey.Checked; revision++; };
@@ -196,13 +210,9 @@ public sealed class ModelSettingsForm : Form
         differentAccount.Enabled = !chatBusy;
         chatSignOut.Visible = session.IsConnected;
         chatSignOut.Enabled = !chatBusy;
-        chatRefresh.Visible = chatDefault.Visible = chatModels.Visible = session.CanUsePlan;
-        chatModels.Items.Clear();
-        foreach (var model in service.ChatModels) chatModels.Items.Add(model);
-        if (chatModels.Items.Count > 0)
-            chatModels.SelectedItem = service.ChatModels.FirstOrDefault(m => service.ChatChoiceID(m.Slug) == service.DefaultModelID) ?? service.ChatModels[0];
+        chatRefresh.Visible = session.CanUsePlan;
         chatRefresh.Enabled = !chatBusy;
-        chatDefault.Enabled = chatModels.Enabled = !chatBusy && chatModels.Items.Count != 0;
+        RefreshDefault();
     }
 
     private async Task ChatAction(Func<Task> operation)
@@ -230,6 +240,7 @@ public sealed class ModelSettingsForm : Form
 
     private void RefreshAccounts(Guid? requested)
     {
+        RefreshDefault();
         filling = true;
         accounts.Items.Clear();
         foreach (var account in service.Accounts) accounts.Items.Add(account);
@@ -265,21 +276,32 @@ public sealed class ModelSettingsForm : Form
         models.Text = string.Join(Environment.NewLine, account.ModelNames);
         delete.Enabled = service.Accounts.Any(item => item.Id == activeID);
         filling = false;
-        RefreshDefault(account.ModelNames.FirstOrDefault(name => account.ChoiceId(name) == service.DefaultModelID), false);
         feedback.Text = "";
     }
 
     private string[] Names() =>
         ModelService.NormalizeNames(models.Text.Split([',', '，', ';', '；', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
 
-    private void RefreshDefault(string? selected = null, bool preserve = true)
+    private void RefreshDefault()
     {
-        if (preserve) selected ??= preferred.SelectedIndex > 0 ? preferred.SelectedItem as string : null;
-        preferred.Items.Clear();
-        preferred.Items.Add(KeepDefault);
-        preferred.Items.AddRange(Names());
-        int index = selected is null ? -1 : preferred.Items.IndexOf(selected);
-        preferred.SelectedIndex = Math.Max(0, index);
+        var choices = service.Models;
+        var defaultID = service.DefaultModelID;
+        updatingPreferred = true;
+        try
+        {
+            preferred.Items.Clear();
+            foreach (var choice in choices) preferred.Items.Add(choice);
+            var current = choices.FirstOrDefault(choice => choice.Id == defaultID);
+            if (current == null)
+            {
+                string label = defaultID == null ? "尚未配置模型" : "默认模型暂不可用，请重新选择";
+                current = new ModelChoice("", label);
+                preferred.Items.Insert(0, current);
+            }
+            preferred.SelectedItem = current;
+            preferred.Enabled = !chatBusy && choices.Count > 0;
+        }
+        finally { updatingPreferred = false; }
     }
 
     private ModelAccount EditedAccount() => service.Prepare(activeID, nameInput.Text,
@@ -296,7 +318,7 @@ public sealed class ModelSettingsForm : Form
     {
         var account = EditedAccount();
         if (account.ModelNames.Length == 0) throw new ArgumentException("请填写至少一个模型 ID，或点击读取可用模型。");
-        service.Save(account, preferred.SelectedIndex > 0 ? (string?)preferred.SelectedItem : null);
+        service.Save(account, null);
         RefreshAccounts(activeID);
         feedback.Text = "已保存。";
     }

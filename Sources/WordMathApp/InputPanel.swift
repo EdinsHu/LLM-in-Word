@@ -113,7 +113,9 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         for stored in settings.accounts {
             var account = stored
             if stored.kind == .chatGPT {
-                if defaultChoice?.accountID == stored.id { preferred = "unavailable:chatgpt" }
+                if let choice = defaultChoice, choice.accountID == stored.id {
+                    preferred = "unavailable:" + stored.id.uuidString + "/" + choice.modelID
+                }
                 guard let current = planAccount, current.id == stored.id,
                       ChatGPTSession.shared.isConnected, current.registrationID == ChatGPTSession.shared.registrationID else { continue }
                 account = current
@@ -129,7 +131,7 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         return (list, preferred)
     }
 
-    private func applyModels() {
+    func applyModels() {
         guard ready else { return }
         let (list, preferred) = modelConfig()
         js("WordMath.setModels(models, preferred)", ["models": list, "preferred": preferred])
@@ -148,14 +150,17 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                 guard !Task.isCancelled, !closed, ChatGPTSession.shared.registrationID == registration else { return }
                 account.discoveredModels = catalog.map(\.slug)
                 account.modelLabels = Dictionary(uniqueKeysWithValues: catalog.map { ($0.slug, $0.name) })
+                guard settings.accounts.contains(where: { $0.id == account.id }) else { return }
+                // Keep model choices in settings consistent with the live panel catalog.
+                try settings.save(account: account)
                 planAccount = account
                 applyModels()
-                if catalog.isEmpty { error("当前 ChatGPT 账号没有返回可用模型。") }
+                if catalog.isEmpty { js("WordMath.catalogError(message)", ["message": "当前 ChatGPT 账号没有返回可用模型。"]) }
             } catch {
                 guard !Task.isCancelled, !closed else { return }
                 planAccount = nil
                 applyModels()
-                self.error("读取 ChatGPT 模型失败：\(error.localizedDescription)")
+                js("WordMath.catalogError(message)", ["message": "读取 ChatGPT 模型失败：\(error.localizedDescription)"])
             }
         }
     }
@@ -233,6 +238,17 @@ final class InputPanel: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             case "chatGPTSettings": openSettings(true)
             case "chatGPTUsage": NSWorkspace.shared.open(URL(string: "https://chatgpt.com/settings/usage")!)
             case "example": showExample()
+            case "setDefaultModel":
+                do {
+                    guard request == nil, let key = body["modelID"] as? String, let (account, model) = choices[key],
+                          account.kind != .chatGPT || (ChatGPTSession.shared.isConnected &&
+                              account.registrationID == ChatGPTSession.shared.registrationID)
+                    else { throw ProviderError.invalidModel }
+                    try settings.setDefault(ModelChoice(accountID: account.id, modelID: model))
+                    applyModels()
+                } catch {
+                    js("WordMath.defaultModelError(message)", ["message": error.localizedDescription])
+                }
             case "generate": try generate(body)
             case "repair": try repair()
             case "discardRepair": failedReply = nil

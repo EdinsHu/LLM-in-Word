@@ -111,7 +111,7 @@ internal sealed class PanelForm : Form
             if (closed) return;
             await Call("start", new { models = service.Models, defaultModelID = service.DefaultModelID,
                 fontName = target.FontName, fontSize = target.FontSize });
-            if (catalogError != null) await Call("error", catalogError);
+            if (catalogError != null) await Call("catalogError", catalogError);
             loaded.TrySetResult(true);
         }
         catch (Exception ex) { StartupFailure(ex); }
@@ -159,6 +159,7 @@ internal sealed class PanelForm : Form
     {
         if (configuring || closed || request != null) return;
         configuring = true;
+        var previousAccount = failed == null ? null : service.AccountForModel(failed.Model);
         try
         {
             using var dialog = new ModelSettingsForm(service, showChatGpt);
@@ -166,20 +167,29 @@ internal sealed class PanelForm : Form
         }
         finally { configuring = false; }
         if (closed) return;
-        RefreshModels();
+        RefreshModels(previousAccount);
     }
 
-    private async void RefreshModels()
+    private async void RefreshModels(ModelAccount? previousAccount)
     {
         try
         {
             if (!loaded.Task.IsCompletedSuccessfully || closed) return;
-            await Call("setModels", service.Models, service.DefaultModelID);
-            if (failed != null)
+            var choices = service.Models;
+            var pending = failed;
+            if (pending != null)
             {
-                failed = null;
-                await Call("error", "已关闭模型设置，请重新生成后再修复排版。");
+                var connection = service.AccountForModel(pending.Model);
+                bool available = choices.Any(choice => choice.Id == pending.Model);
+                bool sameConnection = connection?.Endpoint == previousAccount?.Endpoint &&
+                    connection?.Protocol == previousAccount?.Protocol && connection?.Key == previousAccount?.Key;
+                if (!available || !sameConnection)
+                {
+                    failed = null;
+                    await Call("error", "模型或其连接设置已改变，请重新生成后再修复排版。");
+                }
             }
+            await Call("setModels", choices, service.DefaultModelID);
             if (!closed) Browser.Focus();
         }
         catch (Exception ex) { await ShowError(ex); }
@@ -206,6 +216,18 @@ internal sealed class PanelForm : Form
                     break;
                 case "chatGPTSettings":
                     BeginInvoke((Action)(() => OpenSettings(true)));
+                    break;
+                case "setDefaultModel" when request == null && !configuring:
+                    try
+                    {
+                        service.SetDefaultModel(message["modelID"]?.GetValue<string>() ?? "");
+                    }
+                    catch (Exception error)
+                    {
+                        await Call("defaultModelError", error.Message);
+                        break;
+                    }
+                    await Call("setModels", service.Models, service.DefaultModelID);
                     break;
                 case "chatGPTUsage":
                     ModelSettingsForm.OpenChatUsage();

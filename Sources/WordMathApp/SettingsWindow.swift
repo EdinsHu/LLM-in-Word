@@ -10,8 +10,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let form: AccountForm
 
-    init(settings: ProviderSettings, client: ProviderClient = ProviderClient(), onChange: @escaping () -> Void) {
-        form = AccountForm(settings: settings, client: client, onChange: onChange)
+    init(settings: ProviderSettings, client: ProviderClient = ProviderClient(),
+         onDefaultChange: @escaping () -> Void = {}, onChange: @escaping () -> Void) {
+        form = AccountForm(settings: settings, client: client, onDefaultChange: onDefaultChange, onChange: onChange)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 730, height: 515),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -43,6 +44,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     func show(chatGPT: Bool = false) {
+        form.reloadSettings()
         if chatGPT || (!window.isVisible && form.draft.kind == .chatGPT) { form.editChatGPT() }
         NSApp.activate(ignoringOtherApps: true)
         if window.isMiniaturized { window.deminiaturize(nil) }
@@ -69,26 +71,30 @@ private enum AccountPreset: String, CaseIterable {
 }
 
 @MainActor
-private final class AccountForm: ObservableObject {
-    let settings: ProviderSettings
+final class AccountForm: ObservableObject {
+    private let settings: ProviderSettings
     private let client: ProviderClient
+    private let onDefaultChange: () -> Void
     private let onChange: () -> Void
     @Published var accounts: [ProviderAccount] = []
     @Published var draft: ProviderAccount
     @Published var manual = ""
     @Published var key = ""
-    @Published var defaultID = ""
+    @Published private(set) var defaultChoice: ModelChoice?
     @Published var status = ""
     @Published var isError = false
     @Published var isLoading = false
     private var lookup: Task<Void, Never>?
 
-    init(settings: ProviderSettings, client: ProviderClient, onChange: @escaping () -> Void) {
+    init(settings: ProviderSettings, client: ProviderClient,
+         onDefaultChange: @escaping () -> Void, onChange: @escaping () -> Void) {
         self.settings = settings
         self.client = client
+        self.onDefaultChange = onDefaultChange
         self.onChange = onChange
         let savedAccounts = settings.accounts
         accounts = savedAccounts
+        defaultChoice = settings.defaultModel
         draft = savedAccounts.first ?? ProviderAccount.chatGPT(registrationID: "")
         load(draft)
     }
@@ -97,6 +103,33 @@ private final class AccountForm: ObservableObject {
     var available: [String] {
         if draft.kind == .chatGPT, !connected || draft.registrationID != ChatGPTSession.shared.registrationID { return [] }
         return currentAccount.availableModels
+    }
+
+    func reloadSettings() {
+        accounts = settings.accounts
+        defaultChoice = settings.defaultModel
+    }
+
+    // Only saved accounts have a stable model selection; unsaved edits stay in the form.
+    var defaultOptions: [(choice: ModelChoice, label: String)] {
+        accounts.flatMap { account -> [(ModelChoice, String)] in
+            if account.kind == .chatGPT,
+               account.registrationID != ChatGPTSession.shared.registrationID || !connected { return [] }
+            return account.availableModels.map { model in
+                (ModelChoice(accountID: account.id, modelID: model),
+                 (account.modelLabels?[model] ?? model) + " · " + account.name)
+            }
+        }
+    }
+
+    func chooseDefault(_ choice: ModelChoice) {
+        do {
+            guard defaultOptions.contains(where: { $0.choice == choice }) else { throw ProviderError.invalidModel }
+            try settings.setDefault(choice)
+            defaultChoice = choice
+            onDefaultChange()
+            note("已设为默认模型。")
+        } catch { note(error.localizedDescription, error: true) }
     }
 
     private var currentAccount: ProviderAccount {
@@ -114,15 +147,12 @@ private final class AccountForm: ObservableObject {
         draft = account
         manual = account.manualModels.joined(separator: ", ")
         key = ""
-        let choice = settings.defaultModel
-        defaultID = choice?.accountID == account.id ? choice?.modelID ?? "" : ""
         note("")
     }
 
     func endpointChanged() {
         stopLookup()
         draft.discoveredModels = []
-        defaultID = ""
         note("")
     }
 
@@ -131,7 +161,6 @@ private final class AccountForm: ObservableObject {
         // Model permissions can change with a new API key.
         if !key.isEmpty {
             draft.discoveredModels = []
-            defaultID = ""
         }
         note("")
     }
@@ -147,9 +176,6 @@ private final class AccountForm: ObservableObject {
                 let models = try await client.models(account: account, apiKey: enteredKey)
                 guard !Task.isCancelled else { return }
                 draft.discoveredModels = models
-                if defaultID.isEmpty, settings.defaultModel == nil {
-                    defaultID = available.first ?? ""
-                }
                 note(models.isEmpty ? "此服务没有返回模型，请手动填写模型 ID。" : "已读取 \(models.count) 个模型。保存后即可在输入框中选择。")
             } catch {
                 guard !Task.isCancelled else { return }
@@ -167,11 +193,8 @@ private final class AccountForm: ObservableObject {
         }
         do {
             try settings.save(account: account, apiKey: key.isEmpty ? nil : key)
-            accounts = settings.accounts
-            defer { onChange() }
-            if available.contains(defaultID) {
-                try settings.setDefault(ModelChoice(accountID: account.id, modelID: defaultID))
-            }
+            reloadSettings()
+            onChange()
             load(accounts.first(where: { $0.id == account.id }) ?? account)
             note(available.isEmpty ? "服务已保存。请读取或手动添加模型，之后即可生成内容。" : "已保存，可返回 Word 继续写作。")
         } catch {
@@ -182,7 +205,7 @@ private final class AccountForm: ObservableObject {
     func remove() {
         do {
             try settings.remove(id: draft.id)
-            accounts = settings.accounts
+            reloadSettings()
             load(accounts.first ?? AccountPreset.openAI.account)
             onChange()
             note("已移除此服务。")
@@ -228,7 +251,7 @@ private final class AccountForm: ObservableObject {
                 if old?.registrationID != registration {
                     try settings.save(account: current)
                     draft = current
-                    accounts = settings.accounts
+                    reloadSettings()
                     onChange()
                 }
                 let catalog = try await client.chatGPTCatalog(registrationID: registration)
@@ -237,10 +260,8 @@ private final class AccountForm: ObservableObject {
                 current.discoveredModels = catalog.map(\.slug)
                 current.modelLabels = Dictionary(uniqueKeysWithValues: catalog.map { ($0.slug, $0.name) })
                 try settings.save(account: current)
-                accounts = settings.accounts
+                reloadSettings()
                 draft = current
-                let selected = settings.defaultModel
-                defaultID = selected?.accountID == current.id ? selected?.modelID ?? "" : ""
                 onChange()
                 note(catalog.isEmpty ? "此账号没有返回可选模型。" :
                      "已读取 \(catalog.count) 个模型。生成、追问和修复将使用所选账号的 ChatGPT 套餐用量。")
@@ -265,7 +286,7 @@ private final class AccountForm: ObservableObject {
                     if let saved = settings.accounts.first(where: { $0.kind == .chatGPT }) {
                         try settings.remove(id: saved.id)
                     }
-                    accounts = settings.accounts
+                    reloadSettings()
                     load(ProviderAccount.chatGPT(registrationID: ""))
                 } catch { failure = error }
             }
@@ -306,7 +327,7 @@ private struct AccountSettingsView: View {
                                 HStack {
                                     Text(account.name).lineLimit(1)
                                     Spacer()
-                                    if form.settings.defaultModel?.accountID == account.id {
+                                    if form.defaultChoice?.accountID == account.id {
                                         Image(systemName: "star.fill").accessibilityLabel("包含默认模型")
                                     }
                                 }
@@ -332,6 +353,26 @@ private struct AccountSettingsView: View {
             .background(Color(nsColor: .controlBackgroundColor))
             Divider()
             VStack(alignment: .leading, spacing: 12) {
+                let options = form.defaultOptions
+                let current = options.first { $0.choice == form.defaultChoice }?.choice
+                Picker("默认模型", selection: Binding<ModelChoice?>(
+                    get: { current }, set: { if let choice = $0 { form.chooseDefault(choice) } }
+                )) {
+                    if current == nil {
+                        if let choice = form.defaultChoice, let account = form.accounts.first(where: { $0.id == choice.accountID }) {
+                            Text("\(account.modelLabels?[choice.modelID] ?? choice.modelID) · \(account.name)（暂不可用）")
+                                .tag(nil as ModelChoice?).disabled(true)
+                        } else {
+                            Text("尚无默认模型").tag(nil as ModelChoice?).disabled(true)
+                        }
+                    }
+                    ForEach(options, id: \.choice) { option in
+                        Text(option.label).tag(Optional(option.choice))
+                    }
+                }
+                .disabled(options.isEmpty)
+                .help("选择后立即保存，下次打开输入框时自动选用。")
+                Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 15) {
                         if form.draft.kind == .chatGPT {
@@ -391,13 +432,6 @@ private struct AccountSettingsView: View {
                             LabeledContent("手动模型 ID") {
                                 TextField("多个 ID 用逗号分隔", text: $form.manual)
                             }
-                        }
-                        Picker("默认模型", selection: Binding(
-                            get: { form.available.contains(form.defaultID) ? form.defaultID : "" },
-                            set: { form.defaultID = $0 }
-                        )) {
-                            Text("沿用当前默认设置").tag("")
-                            ForEach(form.available, id: \.self) { Text(form.draft.modelLabels?[$0] ?? $0).tag($0) }
                         }
                         if !form.status.isEmpty {
                             Text(form.status)

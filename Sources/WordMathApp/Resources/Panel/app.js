@@ -18,6 +18,9 @@
   const insertModifier = event => windowsHost ? event.ctrlKey : event.metaKey;
   if (windowsHost) byID('insert').querySelector('kbd').textContent = 'Ctrl+↵';
   const accountSettingsOption = '__wordmath_chatgpt_settings__';
+  const setDefaultOption = '__wordmath_set_default__';
+  let savedDefaultID = '';
+  let temporaryChoice = null;
   let selectedModel = '';
   let modelCount = 0;
   let lastHeight = 0;
@@ -59,6 +62,8 @@
     byID('generate').disabled = state.busy || (hasModels && (!selectedModel || !prompt.value.trim()));
     byID('insert').disabled = !hasDraft || state.busy;
     model.disabled = prompt.disabled = state.busy;
+    const setDefault = byID('setDefaultModel');
+    if (setDefault) setDefault.disabled = !selectedModel || selectedModel === savedDefaultID;
     byID('revisionMode').disabled = byID('replaceMode').disabled = state.busy;
     byID('revisionMode').setAttribute('aria-pressed', String(state.mode === 'revision'));
     byID('replaceMode').setAttribute('aria-pressed', String(state.mode === 'replace'));
@@ -72,30 +77,60 @@
     resizePanel();
   }
 
+  function defaultModelError(message = '') {
+    const line = byID('modelNotice');
+    line.textContent = message;
+    line.hidden = !message;
+  }
+
+  function catalogError(message) {
+    if (!selectedModel) defaultModelError(message);
+  }
+
   function setModels(models, preferredID) {
     const previous = selectedModel;
-    const wasPlan = model.selectedOptions[0]?.dataset.plan === 'true';
     const entries = models || [];
+    const preferred = preferredID || '';
+    const unavailable = preferred.startsWith('unavailable:');
+    const nextDefaultID = unavailable ? preferred.slice('unavailable:'.length) : preferred;
+    if (savedDefaultID !== nextDefaultID) {
+      temporaryChoice = null;
+      defaultModelError();
+    }
+    savedDefaultID = nextDefaultID;
+
+    // Keep a temporary plan selection through catalog reloads. Until it returns,
+    // the user chooses whether to send their next request to another account.
+    const present = id => entries.some(entry => entry.id === id);
+    if (temporaryChoice && !temporaryChoice.usesPlan && !present(temporaryChoice.id)) temporaryChoice = null;
+    const wanted = temporaryChoice?.id ?? (unavailable ? '' : savedDefaultID || entries[0]?.id);
+    selectedModel = wanted && present(wanted) ? wanted : '';
+
     model.replaceChildren();
     for (const entry of entries) {
-      const option = new Option(entry.label, entry.id);
+      const label = !unavailable && entry.id === savedDefaultID ? entry.label + '（默认）' : entry.label;
+      const option = new Option(label, entry.id);
       option.dataset.plan = String(entry.usesChatGPTPlan === true);
       model.append(option);
     }
     modelCount = entries.length;
-    const ids = entries.map(entry => entry.id);
-    const unavailable = preferredID?.startsWith('unavailable:') || (wasPlan && !ids.includes(previous));
-    selectedModel = ids.includes(previous) ? previous
-      : unavailable ? '' : (ids.includes(preferredID) ? preferredID : ids[0] || '');
     if (!selectedModel) {
-      const placeholder = new Option(unavailable ? '请重新选择模型' : '选择模型', '');
+      const placeholder = new Option(temporaryChoice || preferred ? '请重新选择模型' : '选择模型', '');
       placeholder.disabled = true;
       model.prepend(placeholder);
+    }
+    if (modelCount) {
+      const setDefault = new Option('将所选模型设为默认', setDefaultOption);
+      setDefault.id = 'setDefaultModel';
+      model.append(setDefault);
     }
     const accountLabel = entries.some(entry => entry.usesChatGPTPlan) ? '管理 ChatGPT 账号…' : '使用 ChatGPT 登录…';
     model.append(new Option(accountLabel, accountSettingsOption));
     model.value = selectedModel;
-    if (selectedModel !== previous) discardRepair();
+    if (selectedModel !== previous) {
+      defaultModelError();
+      discardRepair();
+    }
     controls();
   }
 
@@ -109,7 +144,10 @@
   function start(config = {}) {
     Object.assign(state, { draft: null, originalPrompt: '', mode: 'revision',
       activeNode: null, scopePath: null, pending: null, busy: false, isExample: false });
+    savedDefaultID = '';
+    temporaryChoice = null;
     selectedModel = '';
+    defaultModelError();
     model.replaceChildren();
     preview.replaceChildren();
     preview.style.removeProperty('--word-font-family');
@@ -373,7 +411,18 @@
       post({ action: 'chatGPTSettings' });
       return;
     }
+    defaultModelError();
+    if (model.value === setDefaultOption) {
+      model.value = selectedModel;
+      if (!state.busy && selectedModel && selectedModel !== savedDefaultID) {
+        post({ action: 'setDefaultModel', modelID: selectedModel });
+      }
+      return;
+    }
+    if (selectedModel === model.value) return;
     selectedModel = model.value;
+    temporaryChoice = selectedModel === savedDefaultID ? null
+      : { id: selectedModel, usesPlan: model.selectedOptions[0]?.dataset.plan === 'true' };
     discardRepair();
     controls();
   });
@@ -425,5 +474,5 @@
     }
   });
   new ResizeObserver(resizePanel).observe(panel);
-  window.WordMath = Object.freeze({ start, result, error, formatError, receipt, busy, setModels });
+  window.WordMath = Object.freeze({ start, result, error, formatError, receipt, busy, setModels, defaultModelError, catalogError });
 })();
